@@ -7,11 +7,11 @@ publish = false
 [workspace]
 
 [dependencies]
-relaygate-destination = "=0.5.4"
-relaygate-protocol = "=0.5.4"
-relaygate-sdk = "=0.5.4"
-relaygate-token-issuer = "=0.5.4"
-relaygate-transport = "=0.5.4"
+relaygate-destination = "=0.5.5"
+relaygate-protocol = "=0.5.5"
+relaygate-sdk = "=0.5.5"
+relaygate-token-issuer = "=0.5.5"
+relaygate-transport = "=0.5.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

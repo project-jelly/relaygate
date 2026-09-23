@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.4"
+version = "0.5.5"
 edition = "2024"
 rust-version = "1.96.1"
 license = "Apache-2.0"
@@ -35,17 +35,17 @@ metrics = "0.24.6"
 metrics-util = "0.20.4"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false, features = ["http-listener"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
-relaygate-destination = { version = "0.5.4", path = "crates/relaygate-destination" }
+relaygate-destination = { version = "0.5.5", path = "crates/relaygate-destination" }
 relaygate-gateway = { path = "crates/relaygate-gateway" }
 relaygate-gateway-peer = { path = "crates/relaygate-gateway-peer" }
 relaygate-gateway-routing = { path = "crates/relaygate-gateway-routing" }
-relaygate-protocol = { version = "0.5.4", path = "crates/relaygate-protocol" }
+relaygate-protocol = { version = "0.5.5", path = "crates/relaygate-protocol" }
 relaygate-route-table = { path = "crates/relaygate-route-table" }
 relaygate-route-table-transport = { path = "crates/relaygate-route-table-transport" }
-relaygate-sdk = { version = "0.5.4", path = "crates/relaygate-sdk" }
-relaygate-token-issuer = { version = "0.5.4", path = "crates/relaygate-token-issuer" }
-relaygate-transport = { version = "0.5.4", path = "crates/relaygate-transport" }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+relaygate-sdk = { version = "0.5.5", path = "crates/relaygate-sdk" }
+relaygate-token-issuer = { version = "0.5.5", path = "crates/relaygate-token-issuer" }
+relaygate-transport = { version = "0.5.5", path = "crates/relaygate-transport" }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

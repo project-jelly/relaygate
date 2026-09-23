@@ -1164,7 +1164,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "relaygate-destination"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-echo-listener"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "relaygate-sdk",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-echo-probe"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "relaygate-sdk",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway-peer"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway-routing"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-protocol"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bytes",
  "relaygate-destination",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-route-table"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "relaygate-destination",
  "serde",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-route-table-transport"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-sdk"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-server"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-test-contract"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "serde",
  "toml",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-token-issuer"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "jsonwebtoken",
  "p256",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-transport"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "rcgen",
  "rustls",
@@ -1409,9 +1409,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
