@@ -139,8 +139,8 @@ lifecycle log가 담당합니다.
 | 메모리 | logical baseline 복귀와 반복 부하 뒤 working set/RSS 추세 함께 관측 |
 | 네트워크 | Pod RX/TX와 DATA probe echo payload goodput 구분 |
 
-화면 구성은 [Design](../../DESIGN.md), 화면·쿼리 검증은
-[TEST 006](../test/006-local-observability-test-plan.md)이 소유합니다.
+화면 구성은 [Grafana dashboard JSON](../../monitoring/grafana/dashboards/)에,
+화면·쿼리 검증은 [TEST 006](../test/006-local-observability-test-plan.md)에 있습니다.
 
 ## Probe
 
