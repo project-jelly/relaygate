@@ -23,7 +23,8 @@ workload 확인:
 배포자가 authorization public-key ConfigMap과 인증서 Secret을 공급한다. 차트는 runtime과 mount만 구성한다.
 내부 인증은 mTLS Gateway 역할 인증서로 수행한다.
 plaintext 모드는 무인증·무암호화 테스트 모드다.
-SDK는 {{ .Values.tls.edge.serverName }} 이름으로 Gateway certificate와 relaygate/3 ALPN을 검증한다.
+Gateway startup/readiness check는 {{ .Values.tls.edge.serverName }} 이름으로 edge certificate와 relaygate/3 ALPN을 검증한다.
+외부 SDK는 자체 Config의 endpoint 이름과 CA 설정으로 독립 검증한다.
 authorization ConfigMap 또는 Secret data 변경 뒤에는 workload를 재시작해야 한다. routeTable.shardCount 변경은 exact
 ShardDirectory generation을 바꾸므로 maintenance window에서 `helm uninstall --wait`와
 pod 삭제 완료를 확인한 뒤 새 구성으로 다시 설치해야 하며 zero-downtime shard resize가 아니다.

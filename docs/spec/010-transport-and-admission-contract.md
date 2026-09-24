@@ -11,11 +11,15 @@ GW  <-> GW : mTLS/TCP + logical Gateway handshake
 GW  <-> RT : mTLS/TCP + logical Gateway/shard handshake
 ```
 
-위 구성이 기본값입니다. `RELAYGATE_INTERNAL_TRANSPORT=plaintext`는 내부 두 구간만 평문 TCP로 실행하고
-SDK TLS를 유지합니다. SDK edge는 독립적으로 `RELAYGATE_SDK_TRANSPORT=tls|plaintext`를 사용합니다(`tls`
-기본). SDK Gateway endpoint의 `tcp://`는 plaintext에 대응하며 access token과 payload를 암호화하지 않습니다. Unknown mode는
-시작 실패입니다. 제거된 test flag(`RELAYGATE_INSECURE_TEST_TRANSPORT`, `RELAYGATE_RT_TRUSTED_LOCAL`)가 설정되어도 시작
-실패입니다. Readiness도 같은 mode를 사용합니다.
+| 설정 | 동작 |
+| --- | --- |
+| `RELAYGATE_INTERNAL_TRANSPORT=mtls` | 기본값; GW↔GW·RT mTLS |
+| `RELAYGATE_INTERNAL_TRANSPORT=plaintext` | 내부 두 구간만 평문; SDK edge 설정은 유지 |
+| `RELAYGATE_SDK_TRANSPORT=tls` | 기본값; Gateway SDK edge TLS |
+| `RELAYGATE_SDK_TRANSPORT=plaintext` / SDK `tcp://` | 명시적 평문; access token·payload 암호화 없음 |
+| 알 수 없는 mode·제거된 test flag | 시작 실패 |
+
+Gateway readiness `check`는 SDK edge와 같은 transport mode를 사용합니다.
 
 | ID | 계약 |
 | --- | --- |
@@ -51,11 +55,14 @@ accept -> rate budget -> transport + handshake slot -> TLS(5s) -> HELLO/response
 | `RELAYGATE_SDK_CONNECTION_BURST` | 256; 초기·유휴 후 budget 최대 보유량. 0은 시작 실패 |
 | HELLO payload | 0 bytes |
 
-256은 보호 상한이며 처리량 보장 수치가 아닙니다. 기존 Relay의 managed reconnect는 SDK backoff로 분산합니다.
-초기 `Relay::connect`는 단일 시도이므로 socket admission 거절 뒤 재시도는 application이 결정합니다. Readiness
-조회는 budget을 소비하지 않고 기존 session은 유지합니다. 소비한 rate budget은 실패·종료에도 반환하지 않고
-시간으로만 보충합니다. 임의의 t초 구간에서 통과 수는 `burst + rate * t` 이하입니다. 이 제한은 GW-local이고
-GW 재시작은 burst를 초기화하며 replica 증가는 cluster 총 예산을 늘립니다.
+| 경계 | 규칙 |
+| --- | --- |
+| 256 기본값 | 보호 상한; 처리량 보장 아님 |
+| 초기 `Relay::connect` | 단일 시도; admission 거절 뒤 재시도는 application 결정 |
+| managed reconnect | SDK backoff로 분산 |
+| readiness 조회·기존 session | budget 소비 없음·유지 |
+| rate budget | 실패·종료 시 반환하지 않음; 시간으로만 refill; t초 통과 수 ≤ `burst + rate * t` |
+| 적용 범위 | GW-local; 재시작 시 burst 초기화, replica 증가 시 cluster 총 예산 증가 |
 
 ## SDK 제어 요청 보호
 
@@ -69,10 +76,13 @@ DATA / PING / OFFER 응답 / UNPUBLISH / CANCEL / FIN / CLOSE / RESET -> 기존 
 | `RELAYGATE_CONTROL_RATE_PER_SECOND` / `RELAYGATE_CONTROL_BURST` | GW 전체 4,096/s · burst 4,096 |
 | `RELAYGATE_SESSION_CONTROL_RATE_PER_SECOND` / `RELAYGATE_SESSION_CONTROL_BURST` | session별 256/s · burst 256 |
 
-두 operation은 같은 bucket을 공유합니다. Session budget이 없는 요청은 GW budget을 소비하지 않습니다. 소비한
-budget은 결과·연결 종료와 무관하게 시간으로만 보충합니다. Session 종료는 해당 bucket을 제거하고 GW bucket은
-유지합니다. 거절은 authorization·registry 변경·RT Resolve·peer OPEN 전에 결정합니다. DIAL ConnectionId fence는
-거절 후에도 유지합니다. 기존 Binding·Pipe와 정리 메시지는 이 제한을 사용하지 않습니다.
+| 경계 | 규칙 |
+| --- | --- |
+| 대상 | PUBLISH·DIAL이 session·GW bucket을 공유; DATA·정리 메시지는 제외 |
+| 소비 순서 | session budget 거절은 GW budget을 소비하지 않음 |
+| refill·종료 | 결과·연결 종료와 무관하게 시간으로 refill; session 종료 시 해당 bucket만 제거 |
+| 거절 시점 | authorization·registry 변경·RT Resolve·peer OPEN 이전; DIAL ConnectionId fence는 유지 |
+| 기존 상태 | Binding·Pipe 유지 |
 
 ## Runtime 환경변수
 
@@ -163,9 +173,11 @@ budget은 결과·연결 종료와 무관하게 시간으로만 보충합니다.
 | `RELAYGATE_RT_MAX_FRAME_LEN` | 1 MiB | RT frame 최대 길이 |
 | `RELAYGATE_RT_HANDSHAKE_TIMEOUT_MS` | 3000 | connection handshake deadline |
 
-`RELAYGATE_RT_HANDSHAKE_TIMEOUT_MS`는 TLS accept와 logical handshake deadline이며, 같은 값이 connection 종료 시
-writer drain deadline과 over-capacity 거절 frame 전송 deadline으로도 쓰입니다.
+`RELAYGATE_RT_HANDSHAKE_TIMEOUT_MS`: TLS accept·logical handshake·writer drain·over-capacity 거절 frame 전송의 deadline.
 
-RT connection이 `RELAYGATE_RT_MAX_CONNECTIONS`를 넘으면 거절은 transport에 따라 다르게 보입니다. plaintext는
-`HANDSHAKE_REJECTED`(`RESOURCE_EXHAUSTED`)를 보낸 뒤 닫고, mTLS는 handshake 전이라 frame을 쓸 암호화 채널이
-없어 연결만 닫으므로 Gateway client는 `UNAVAILABLE`을 관측합니다. 두 경우 모두 거절 metric은 동일하게 기록됩니다.
+| RT connection 상한 초과 | Gateway 관측 | RT 동작 |
+| --- | --- | --- |
+| plaintext | `RESOURCE_EXHAUSTED` | `HANDSHAKE_REJECTED` 전송 뒤 종료 |
+| mTLS | `UNAVAILABLE` | 암호화 channel 수립 전 연결 종료 |
+
+두 경우 모두 같은 거절 metric을 기록합니다.
