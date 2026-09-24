@@ -114,63 +114,27 @@ docker compose --profile observability down --volumes --remove-orphans
 
 ## 의존성 업데이트
 
-[Dependabot 설정](.github/dependabot.yml)은 매주 월요일 03:23 KST에 Cargo·GitHub Actions·Docker base image 신버전을 확인합니다.
-
-- Cargo 패치 업데이트는 묶고, 마이너·메이저 업데이트는 별도 PR로 제안합니다. 동시에 열린 일반 업데이트 PR은 최대 3개입니다.
-- GitHub Actions와 `deploy/docker/Dockerfile`은 각각 마이너·패치를 묶고 메이저는 별도 PR로 제안합니다. 각각 최대 1개씩 열어 일반 업데이트 PR은 전체 최대 5개입니다.
-- 외부 Action은 full commit SHA로 고정하며 Dependabot이 이후 SHA 업데이트를 제안합니다.
-- Cargo 직접 의존성과 `Cargo.lock`에 기록된 전이 의존성을 모두 확인합니다.
-- `relaygate-*` 자체 버전과 `tests/package-consumer`의 릴리즈 검증용 고정 버전은 제외합니다.
-- 취약점 수정 PR은 기존 Dependabot security updates가 별도로 생성합니다.
-
-실행 상태와 수동 확인은 저장소의 `Insights → Dependency graph → Dependabot`에서 확인합니다.
-PR은 기존 CI로 검증하고 직접 머지합니다. 릴리즈 버전 변경과 배포는 기존 절차를 따릅니다.
+[Dependabot](.github/dependabot.yml)은 매주 Cargo·GitHub Actions·Docker 버전을 확인해 PR을 제안합니다.
+취약점 알림과 보안 업데이트는 GitHub Dependabot 설정을 사용합니다. 업데이트 PR은 기존 CI를 통과한 뒤 수동으로 머지합니다.
 
 ## crates.io 릴리즈 재실행
 
-[Release crates](.github/workflows/release-crates.yml)는 현재 main의 workspace 버전과
-`publish-<version>` 확인을 받은 후 기존 package 검증을 수행합니다.
-일부 crate만 배포된 상태에서 실패해도 같은 버전으로 다시 실행할 수 있습니다.
-
-- 이미 배포된 모든 crate의 registry checksum을 확인하고 현재 소스로 만든 package와 파일별로 비교합니다.
-- `.cargo_vcs_info.json`의 `git.sha1`만 비교에서 제외합니다. 소스·manifest·lockfile 등 다른 내용이 다르거나
-  버전이 yanked 상태이면 새 배포 전에 실패합니다. 내용이 달라졌다면 새 버전이 필요합니다.
-- 일치하는 crate는 건너뛰고 미배포 crate만 의존성 순서대로 배포하며 crates.io index 반영을 기다립니다.
-- 깨끗한 checkout에서 `python3 .github/scripts/release_crates.py`로 배포 없이 사전 검사를 실행할 수 있습니다.
-  실제 업로드는 workflow가 전달하는 `--publish` 옵션이 있을 때만 수행합니다.
+[Release crates](.github/workflows/release-crates.yml)는 일부 crate 배포 뒤 실패해도 같은 버전으로 재실행할 수 있습니다.
+이미 배포된 package가 현재 소스와 일치하는지 확인하고, 일치하지 않거나 yanked 상태면 새 배포 전에 실패합니다.
+배포 없는 사전 검사는 깨끗한 checkout에서 `python3 .github/scripts/release_crates.py`로 실행합니다.
 
 ## 릴리즈 이미지 취약점 보고서
 
-[Released image security](.github/workflows/security-rescan.yml)는 매일 03:23 KST에 GHCR의
-`relaygate-gateway:latest`와 `relaygate-route-table:latest`를 Trivy로 검사합니다.
-각 이미지의 index digest를 한 번 확인하고, 그 안의 Linux amd64·arm64 digest를 검사 대상으로 고정합니다.
-이는 최신 릴리즈 검사이며 현재 production에 배포된 이미지와 일치하는지는 확인하지 않습니다.
-
-- `HIGH`와 `CRITICAL`을 수정 버전 유무와 관계없이 보고합니다. 취약점 발견으로 작업을 실패시키지 않습니다.
-- 검사 자체가 실패하면 별도 보안 workflow가 실패합니다. 기존 PR·빌드·릴리즈·배포와 연결된 gate는 없습니다.
-- `Security → Code scanning`과 Actions 실행 요약에서 결과를 확인합니다. JSON·SARIF·텍스트 결과와
-  검사 digest·Trivy 버전은 실행 artifact에 30일 보관합니다. Security 업로드 실패 시 artifact로 확인합니다.
-- 수동 실행은 `Actions → Released image security → Run workflow`를 사용합니다. Cron은 기본 브랜치에서
-  실행되며 GitHub의 실행 대기 상황에 따라 늦어질 수 있습니다.
-- 공개 GHCR 이미지를 읽으므로 registry secret이나 production credential이 필요하지 않습니다.
-  Trivy Action의 DB cache를 사용하며 매 실행 시 DB 갱신을 확인합니다.
-
-현재 이미지는 일반 Rust 바이너리만 포함하므로 내장 crate의 Trivy 탐지 범위는 제한됩니다.
-[Trivy의 compiled Rust 검사](https://trivy.dev/docs/latest/coverage/language/rust/)에는
-`cargo-auditable` metadata가 필요합니다. 현재 보고서의 OS package 검사와 Dependabot의 source dependency
-검사를 함께 사용하며, 바이너리 metadata 추가는 추후 build 변경으로 검토합니다.
-취약점 예외는 현재 없습니다. 예외가 필요하면 finding ID·근거·만료일을 기록하고 검토합니다.
+[Released image security](.github/workflows/security-rescan.yml)는 매일 GHCR의 두 `latest` 이미지를
+digest로 고정해 Trivy로 검사합니다. `HIGH`·`CRITICAL`은 `Security → Code scanning`과 실행 artifact에 보고하며
+취약점 발견만으로 배포를 차단하지 않습니다. 이 검사는 현재 배포 이미지가 아닌 최신 릴리즈를 대상으로 합니다.
+Rust 바이너리 내부 crate의 탐지는 제한되므로 source dependency는 Dependabot으로 확인합니다.
 
 ## Helm
 
-차트는 RouteTable과 Gateway를 배포하며 credential과 certificate는 release namespace의 Secret을
-사용합니다. 기본 topology는 RT shard 1개와 Gateway 1개입니다.
-운영 이미지는 Distroless `cc-debian13`을 기반으로 하며 UID/GID `10001:10001`로 실행합니다.
-이미지 안에 shell이 없으므로 점검은 `relaygate-server check`를 직접 실행합니다.
-
-SDK edge는 TLS를 사용합니다. 내부 전송은 기본 mTLS이며, 격리된 테스트 환경은
-`tls.internal.mode=plaintext`로 내부 인증서 없이 설치합니다.
-인증서 발급·갱신·재시작은 배포자가 관리하며 차트에는 기존 Secret 이름과 운영 annotation을 전달합니다.
+차트는 RouteTable과 Gateway를 배포합니다. 기본값은 edge TLS·내부 mTLS이며 인증서는 기존 Secret을 사용합니다.
+운영 이미지는 Distroless `cc-debian13` 기반이며 UID/GID `10001:10001`로 실행합니다.
+이미지에 shell이 없으므로 점검은 `relaygate-server check`를 직접 실행합니다.
 
 ```bash
 helm lint deploy/helm/relaygate
