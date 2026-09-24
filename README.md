@@ -112,6 +112,21 @@ Compose 종료:
 docker compose --profile observability down --volumes --remove-orphans
 ```
 
+## 의존성 업데이트
+
+[Renovate workflow](.github/workflows/renovate.yml)는 매주 월요일 03:23 KST에 실행되며,
+GitHub Actions의 `Run workflow`로 즉시 실행할 수도 있습니다. 정책은 [renovate.json](renovate.json)에 둡니다.
+
+- Cargo 패치 업데이트는 묶고, 마이너·메이저 업데이트는 별도 PR로 제안합니다. 동시에 열린 PR은 최대 3개입니다.
+- `Cargo.lock` 유지보수 PR은 현재 manifest 범위 안에서 전이 의존성을 포함한 잠금 버전을 갱신합니다.
+- `relaygate-*` 자체 버전과 `tests/package-consumer`의 릴리즈 검증용 고정 버전은 제외합니다.
+- 취약점 수정 PR은 기존 Dependabot security updates가 담당합니다.
+
+Renovate는 저장소의 `GITHUB_TOKEN`을 사용합니다. 저장소 Actions 설정에서
+`Allow GitHub Actions to create and approve pull requests`가 켜져 있어야 하며,
+생성된 PR의 CI는 쓰기 권한이 있는 사용자가 `Approve workflows to run`을 눌러 시작합니다.
+자동 머지는 꺼져 있고, 머지 후 릴리즈 버전 변경과 배포는 기존 절차를 따릅니다.
+
 ## Helm
 
 차트는 RouteTable과 Gateway를 배포하며 credential과 certificate는 release namespace의 Secret을
