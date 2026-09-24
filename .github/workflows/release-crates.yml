@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -63,83 +63,7 @@ jobs:
       - name: Verify package archives
         run: .github/scripts/check-crate-packages.sh
 
-      - name: Confirm versions are unpublished
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          packages=(
-            relaygate-destination
-            relaygate-transport
-            relaygate-protocol
-            relaygate-token-issuer
-            relaygate-sdk
-          )
-          for package in "${packages[@]}"; do
-            status=$(curl --silent --show-error --output /dev/null \
-              --write-out '%{http_code}' \
-              --header "User-Agent: relaygate-release (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY})" \
-              "https://crates.io/api/v1/crates/${package}/${VERSION}")
-            case "$status" in
-              404) ;;
-              200)
-                echo "::error::${package} ${VERSION} is already published"
-                exit 1
-                ;;
-              *)
-                echo "::error::crates.io lookup for ${package} ${VERSION} returned HTTP ${status}"
-                exit 1
-                ;;
-            esac
-          done
-
-      - name: Publish crates
+      - name: Publish missing crates after verifying existing versions
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          wait_for_index() {
-            local package="$1"
-            local index_path
-            index_path=$(python3 - "$package" <<'PY'
-          import sys
-
-          name = sys.argv[1]
-          if len(name) == 1:
-              print(f"1/{name}")
-          elif len(name) == 2:
-              print(f"2/{name}")
-          elif len(name) == 3:
-              print(f"3/{name[0]}/{name}")
-          else:
-              print(f"{name[:2]}/{name[2:4]}/{name}")
-          PY
-            )
-
-            for attempt in $(seq 1 60); do
-              if curl --fail --silent --show-error \
-                --header "User-Agent: relaygate-release (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY})" \
-                "https://index.crates.io/${index_path}" \
-                | python3 -c \
-                    'import json,sys; version=sys.argv[1]; raise SystemExit(0 if any(json.loads(line)["vers"] == version for line in sys.stdin if line.strip()) else 1)' \
-                    "$VERSION"; then
-                return
-              fi
-              echo "waiting for ${package} ${VERSION} to reach the crates.io index (${attempt}/60)"
-              sleep 5
-            done
-
-            echo "::error::${package} ${VERSION} did not reach the crates.io index"
-            return 1
-          }
-
-          publish() {
-            local package="$1"
-            cargo publish --locked -p "$package"
-            wait_for_index "$package"
-          }
-
-          publish relaygate-destination
-          publish relaygate-transport
-          publish relaygate-protocol
-          publish relaygate-token-issuer
-          publish relaygate-sdk
+        run: python3 .github/scripts/release_crates.py --publish

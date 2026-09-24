@@ -36,7 +36,7 @@ jobs:
       draft: ${{ steps.release.outputs.draft }}
       digest: ${{ steps.package.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
@@ -79,12 +79,12 @@ jobs:
             *) echo "::error::release lookup returned HTTP $status"; exit 1 ;;
           esac
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         if: steps.release.outputs.publish == 'true'
         with:
           version: v3.15.2
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.release.outputs.publish == 'true'
         with:
           ref: gh-pages
@@ -113,7 +113,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/chart-site"
           cp gh-pages/*.tgz gh-pages/*.sha256 gh-pages/index.yaml "$RUNNER_TEMP/chart-site/"
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         if: steps.release.outputs.publish == 'true'
         with:
           path: ${{ runner.temp }}/chart-site
@@ -133,9 +133,9 @@ jobs:
     steps:
       - name: Deploy chart repository
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.15.2
 

@@ -21,3 +21,29 @@ updates:
       - dependency-name: 'relaygate-*'
     exclude-paths:
       - tests/package-consumer/**
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:23'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 1
+    groups:
+      github-actions-minor-patches:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /deploy/docker
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:23'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 1
+    groups:
+      docker-minor-patches:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]

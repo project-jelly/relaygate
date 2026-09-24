@@ -114,15 +114,30 @@ docker compose --profile observability down --volumes --remove-orphans
 
 ## 의존성 업데이트
 
-[Dependabot 설정](.github/dependabot.yml)은 매주 월요일 03:23 KST에 Cargo 신버전을 확인합니다.
+[Dependabot 설정](.github/dependabot.yml)은 매주 월요일 03:23 KST에 Cargo·GitHub Actions·Docker base image 신버전을 확인합니다.
 
 - Cargo 패치 업데이트는 묶고, 마이너·메이저 업데이트는 별도 PR로 제안합니다. 동시에 열린 일반 업데이트 PR은 최대 3개입니다.
-- 직접 의존성과 `Cargo.lock`에 기록된 전이 의존성을 모두 확인합니다.
+- GitHub Actions와 `deploy/docker/Dockerfile`은 각각 마이너·패치를 묶고 메이저는 별도 PR로 제안합니다. 각각 최대 1개씩 열어 일반 업데이트 PR은 전체 최대 5개입니다.
+- 외부 Action은 full commit SHA로 고정하며 Dependabot이 이후 SHA 업데이트를 제안합니다.
+- Cargo 직접 의존성과 `Cargo.lock`에 기록된 전이 의존성을 모두 확인합니다.
 - `relaygate-*` 자체 버전과 `tests/package-consumer`의 릴리즈 검증용 고정 버전은 제외합니다.
 - 취약점 수정 PR은 기존 Dependabot security updates가 별도로 생성합니다.
 
 실행 상태와 수동 확인은 저장소의 `Insights → Dependency graph → Dependabot`에서 확인합니다.
 PR은 기존 CI로 검증하고 직접 머지합니다. 릴리즈 버전 변경과 배포는 기존 절차를 따릅니다.
+
+## crates.io 릴리즈 재실행
+
+[Release crates](.github/workflows/release-crates.yml)는 현재 main의 workspace 버전과
+`publish-<version>` 확인을 받은 후 기존 package 검증을 수행합니다.
+일부 crate만 배포된 상태에서 실패해도 같은 버전으로 다시 실행할 수 있습니다.
+
+- 이미 배포된 모든 crate의 registry checksum을 확인하고 현재 소스로 만든 package와 파일별로 비교합니다.
+- `.cargo_vcs_info.json`의 `git.sha1`만 비교에서 제외합니다. 소스·manifest·lockfile 등 다른 내용이 다르거나
+  버전이 yanked 상태이면 새 배포 전에 실패합니다. 내용이 달라졌다면 새 버전이 필요합니다.
+- 일치하는 crate는 건너뛰고 미배포 crate만 의존성 순서대로 배포하며 crates.io index 반영을 기다립니다.
+- 깨끗한 checkout에서 `python3 .github/scripts/release_crates.py`로 배포 없이 사전 검사를 실행할 수 있습니다.
+  실제 업로드는 workflow가 전달하는 `--publish` 옵션이 있을 때만 수행합니다.
 
 ## 릴리즈 이미지 취약점 보고서
 
