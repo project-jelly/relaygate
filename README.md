@@ -124,6 +124,28 @@ docker compose --profile observability down --volumes --remove-orphans
 실행 상태와 수동 확인은 저장소의 `Insights → Dependency graph → Dependabot`에서 확인합니다.
 PR은 기존 CI로 검증하고 직접 머지합니다. 릴리즈 버전 변경과 배포는 기존 절차를 따릅니다.
 
+## 릴리즈 이미지 취약점 보고서
+
+[Released image security](.github/workflows/security-rescan.yml)는 매일 03:23 KST에 GHCR의
+`relaygate-gateway:latest`와 `relaygate-route-table:latest`를 Trivy로 검사합니다.
+각 이미지의 index digest를 한 번 확인하고, 그 안의 Linux amd64·arm64 digest를 검사 대상으로 고정합니다.
+이는 최신 릴리즈 검사이며 현재 production에 배포된 이미지와 일치하는지는 확인하지 않습니다.
+
+- `HIGH`와 `CRITICAL`을 수정 버전 유무와 관계없이 보고합니다. 취약점 발견으로 작업을 실패시키지 않습니다.
+- 검사 자체가 실패하면 별도 보안 workflow가 실패합니다. 기존 PR·빌드·릴리즈·배포와 연결된 gate는 없습니다.
+- `Security → Code scanning`과 Actions 실행 요약에서 결과를 확인합니다. JSON·SARIF·텍스트 결과와
+  검사 digest·Trivy 버전은 실행 artifact에 30일 보관합니다. Security 업로드 실패 시 artifact로 확인합니다.
+- 수동 실행은 `Actions → Released image security → Run workflow`를 사용합니다. Cron은 기본 브랜치에서
+  실행되며 GitHub의 실행 대기 상황에 따라 늦어질 수 있습니다.
+- 공개 GHCR 이미지를 읽으므로 registry secret이나 production credential이 필요하지 않습니다.
+  Trivy Action의 DB cache를 사용하며 매 실행 시 DB 갱신을 확인합니다.
+
+현재 이미지는 일반 Rust 바이너리만 포함하므로 내장 crate의 Trivy 탐지 범위는 제한됩니다.
+[Trivy의 compiled Rust 검사](https://trivy.dev/docs/latest/coverage/language/rust/)에는
+`cargo-auditable` metadata가 필요합니다. 현재 보고서의 OS package 검사와 Dependabot의 source dependency
+검사를 함께 사용하며, 바이너리 metadata 추가는 추후 build 변경으로 검토합니다.
+취약점 예외는 현재 없습니다. 예외가 필요하면 finding ID·근거·만료일을 기록하고 검토합니다.
+
 ## Helm
 
 차트는 RouteTable과 Gateway를 배포하며 credential과 certificate는 release namespace의 Secret을
