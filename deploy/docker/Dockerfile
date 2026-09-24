@@ -12,10 +12,9 @@ RUN cargo build --locked --release \
     --bin relaygate-echo-listener \
     --bin relaygate-echo-probe
 
-FROM debian:bookworm-slim AS server-runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97 AS server-runtime
 
-RUN groupadd --system --gid 10001 relaygate \
-    && useradd --system --uid 10001 --gid relaygate --no-create-home relaygate
+WORKDIR /
 
 COPY --from=builder /workspace/target/release/relaygate-server /usr/local/bin/relaygate-server
 
@@ -25,14 +24,14 @@ FROM server-runtime AS gateway
 
 EXPOSE 27420 27421
 
-ENTRYPOINT ["relaygate-server"]
+ENTRYPOINT ["/usr/local/bin/relaygate-server"]
 CMD ["gateway"]
 
 FROM server-runtime AS route-table
 
 EXPOSE 27430
 
-ENTRYPOINT ["relaygate-server"]
+ENTRYPOINT ["/usr/local/bin/relaygate-server"]
 CMD ["route-table"]
 
 FROM server-runtime AS test
