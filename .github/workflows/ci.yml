@@ -587,6 +587,10 @@ jobs:
         run: |
           docker build --file deploy/docker/Dockerfile --target gateway --tag relaygate-gateway:ci .
           docker build --file deploy/docker/Dockerfile --target route-table --tag relaygate-route-table:ci .
+          for image in relaygate-gateway:ci relaygate-route-table:ci; do
+            test "$(docker image inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
+            test "$(docker image inspect --format '{{.Config.WorkingDir}}' "$image")" = '/'
+          done
 
       - name: Start two RouteTables, three Gateways, Listeners, and continuity Pipes
         run: |

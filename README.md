@@ -165,6 +165,8 @@ PR은 기존 CI로 검증하고 직접 머지합니다. 릴리즈 버전 변경�
 
 차트는 RouteTable과 Gateway를 배포하며 credential과 certificate는 release namespace의 Secret을
 사용합니다. 기본 topology는 RT shard 1개와 Gateway 1개입니다.
+운영 이미지는 Distroless `cc-debian13`을 기반으로 하며 UID/GID `10001:10001`로 실행합니다.
+이미지 안에 shell이 없으므로 점검은 `relaygate-server check`를 직접 실행합니다.
 
 SDK edge는 TLS를 사용합니다. 내부 전송은 기본 mTLS이며, 격리된 테스트 환경은
 `tls.internal.mode=plaintext`로 내부 인증서 없이 설치합니다.
