@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:23'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 3
+    # Include transitive dependencies recorded in Cargo.lock.
+    allow:
+      - dependency-type: all
+    groups:
+      cargo-patches:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [patch]
+    # These versions are synchronized by the RelayGate release process.
+    ignore:
+      - dependency-name: 'relaygate-*'
+    exclude-paths:
+      - tests/package-consumer/**
