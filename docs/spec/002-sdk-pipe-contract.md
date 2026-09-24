@@ -14,13 +14,16 @@
 | `Listener::close()` | 해당 Listener 종료 |
 | `Relay::close()` | 전체 SDK runtime 종료 |
 
-`Config`는 Gateway transport, timeout, heartbeat, reconnect와 `ResourceLimits`를 가집니다. Application이
-config source를 읽어 SDK에 전달합니다. `HELLO/WELCOME`에는 credential이 없습니다.
+| 설정 | 동작 |
+| --- | --- |
+| `Config` | Gateway transport, timeout, heartbeat, reconnect, `ResourceLimits` 지정 |
+| `Config::new("host:port")` / `tls://host:port` | 공인 CA, endpoint 이름·SNI, `relaygate/3` ALPN 검증 |
+| `Config::new("tcp://host:port")` | 명시적 평문; TLS 실패 후 fallback 없음 |
+| `Config::with_ca_certificate` | 사설 CA 지정; 평문 endpoint에는 사용 불가 |
+| `Config::with_transport` | 명시적 transport 사용; CA·검증 이름·client 인증은 `ClientTlsConfig`가 설정 |
+| IPv6 endpoint | `[::1]:port` 형식 |
 
-`host:port`와 `tls://host:port`는 기본 공인 CA, endpoint 이름 검증, SNI와 `relaygate/3` ALPN을 자동
-적용합니다. `tcp://host:port`는 제공자가 명시한 평문 연결입니다. IPv6는 `[::1]:port` 형식을 사용합니다.
-사설 CA는 `with_ca_certificate`로 지정하며 평문 endpoint에는 CA 설정을 허용하지 않습니다. TLS 검증 실패 후
-평문 재접속은 없습니다. Agent 풀과 작업 분배 정책은 application이 소유합니다.
+Application은 config source, Agent 풀과 작업 분배 정책을 소유합니다. `HELLO/WELCOME`에는 credential이 없습니다.
 
 ### SDK resource hierarchy
 
@@ -36,11 +39,12 @@ Relay
             └── buffered inbound bytes 1 MiB
 ```
 
-위 값은 `ResourceLimits::default()`의 process-local 안전 상한이며 지속 가능한 처리량 보장이 아닙니다.
-Application은 `Config::with_resource_limits`로 하나의 묶음으로 조정합니다. Listener live 상한은 Relay live
-상한 이하, Pipe byte 상한은 Relay byte 상한 이하이고 모든 값은 양수입니다. Pending Pipe도 live Pipe 점유를
-공유하므로 두 상한 중 작은 값이 실제 queue 한도가 됩니다. Gateway admission은 비신뢰 client에 대한
-cluster-side 권위 상한을 계속 소유합니다.
+| 범위 | 규칙 |
+| --- | --- |
+| `ResourceLimits::default()` | process-local 보호 상한; 처리량 보장 아님 |
+| `Config::with_resource_limits` | 모든 값 양수; Listener live ≤ Relay live, Pipe bytes ≤ Relay bytes |
+| incoming pending Pipe | pending·live slot 동시 점유; 작은 상한이 queue를 제한 |
+| Gateway admission | 비신뢰 client에 대한 cluster-side 권위 상한 |
 
 ## AccessTokenSource
 
@@ -67,17 +71,18 @@ async callback(action, Destination) -> PUBLISH 또는 DIAL
 | `SDK-020` | Relay live Pipe 상한은 outgoing DIAL의 pending 단계부터 returned Pipe 수명까지와 incoming Pipe를 함께 계산하고 모든 실패·cancel·drop·terminal 경로에서 점유를 반환한다. |
 | `SDK-022` | Relay와 Listener status subscription은 SDK 소유 wrapper이며 raw watch channel을 노출하지 않는다. `current()`는 latest snapshot을 반환하고 subscription cursor를 소비하며, `changed()`는 그 이후 coalescing된 latest state를 반환한다. Relay `ACTIVE`는 current `HELLO/WELCOME` transport session 설치를 뜻하며 Listener republish/`BLOCKED`와 분리된다. Relay `CLOSED`는 terminal이고 `ACTIVE`로 역행하지 않는다. |
 
-Token source 실패와 deadline은 해당 operation의 `UNAVAILABLE` 또는 `DEADLINE_EXCEEDED/NOT_OBSERVED`입니다.
-Initial listen의 PUBLISH가 commit되기 전 session이 끝나면 원래 deadline 안에서 재시도합니다. commit 뒤
-session이 끝나면 `MAYBE_OBSERVED` 오류로 반환합니다. Gateway의 initial PUBLISH 실패 응답은
-`Relay::listen`의 `Err`입니다. 이미 반환된 Listener의 republish token source 실패는 `SUSPENDED`로 두고
-bounded delay 뒤 다시 공급을 요청합니다. 이미 반환된 Listener의 영구적인 PUBLISH 실패(`INVALID_ARGUMENT`,
-`UNAUTHENTICATED`, `PERMISSION_DENIED`, `FAILED_PRECONDITION`, `ALREADY_EXISTS`)는 Listener를
-`BLOCKED`로 만듭니다. Application은 새로운 token source 또는 새 Relay/Listener를 구성해 회복합니다.
-모든 returned Listener가 `ACTIVE` 또는 `BLOCKED`로 settled되면 reconnect episode는 종료됩니다. 하나 이상
-`BLOCKED`가 있으면 Relay session은 `ACTIVE`여도 episode outcome은 degraded입니다. reconnect 중 permanent
-republish failure로 `BLOCKED`가 publish된 Listener가 즉시 drop되어 desired set에서 제거되어도 해당 episode는
-recovered가 아니라 degraded로 종료됩니다.
+| 상황 | 결과 |
+| --- | --- |
+| token source 실패·deadline | 해당 operation만 `UNAVAILABLE` 또는 `DEADLINE_EXCEEDED/NOT_OBSERVED` |
+| initial PUBLISH pre-commit session 종료 | 원래 deadline 안에서 재시도 |
+| initial PUBLISH post-commit session 종료 | `MAYBE_OBSERVED` 오류 |
+| Gateway의 initial PUBLISH 실패 응답 | `Relay::listen`의 `Err` |
+| returned Listener의 republish token source 실패 | `SUSPENDED`; bounded delay 뒤 재공급 요청 |
+| returned Listener의 영구적 PUBLISH 실패 | `BLOCKED`; `INVALID_ARGUMENT`, `UNAUTHENTICATED`, `PERMISSION_DENIED`, `FAILED_PRECONDITION`, `ALREADY_EXISTS` |
+| reconnect episode 종료 | 모든 returned Listener가 `ACTIVE` 또는 `BLOCKED`로 settled |
+| episode 중 `BLOCKED` 발생 | Relay session이 `ACTIVE`이거나 Listener가 즉시 drop되어도 outcome은 `degraded` |
+
+`BLOCKED` 복구는 application이 새 token source 또는 Relay/Listener를 구성합니다.
 
 ## Relay runtime
 
