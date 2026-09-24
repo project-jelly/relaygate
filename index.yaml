@@ -2,7 +2,20 @@ apiVersion: v1
 entries:
   relaygate:
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.653502304Z"
+    created: "2026-09-24T02:28:45.708098181Z"
+    description: Memory-only RelayGate Gateway and RouteTable runtime
+    digest: a79819ba9bc48a6623b9dbf08e750d83144e17d2f707e57c0feca2fc3bb6db14
+    home: https://github.com/project-jelly/relaygate
+    kubeVersion: '>=1.32.0-0'
+    name: relaygate
+    sources:
+    - https://github.com/project-jelly/relaygate
+    type: application
+    urls:
+    - https://project-jelly.github.io/relaygate/relaygate-0.3.5.tgz
+    version: 0.3.5
+  - apiVersion: v2
+    created: "2026-09-24T02:28:45.707543872Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: c0be1656c1599f4274f52867c7a45eba3272c79a0c85a00af552347805d50594
     home: https://github.com/project-jelly/relaygate
@@ -15,7 +28,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.3.4.tgz
     version: 0.3.4
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.652720042Z"
+    created: "2026-09-24T02:28:45.70661282Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 237caed1aaa52c34071df3b23ac3f08f2193261d45c8c0f6cce85fd45349620a
     home: https://github.com/project-jelly/relaygate
@@ -28,7 +41,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.3.3.tgz
     version: 0.3.3
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.652113186Z"
+    created: "2026-09-24T02:28:45.706160301Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 8a4e0b2121e9c14b428f1c4955ff8890533a398551125934dae13c96722d7cfa
     home: https://github.com/project-jelly/relaygate
@@ -41,7 +54,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.3.2.tgz
     version: 0.3.2
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.651108279Z"
+    created: "2026-09-24T02:28:45.705708113Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 2d47494fbbb8f3df95f4c59893e2541bd9112edae0f83a67db208f4429fb7220
     home: https://github.com/project-jelly/relaygate
@@ -54,7 +67,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.3.1.tgz
     version: 0.3.1
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.65027369Z"
+    created: "2026-09-24T02:28:45.705201514Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 2feb0aab17254223fecb68d7602e5a607515ec769b34e4380e5d83821b5c4578
     home: https://github.com/cagojeiger/relaygate
@@ -67,7 +80,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.3.0.tgz
     version: 0.3.0
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.64968661Z"
+    created: "2026-09-24T02:28:45.704721494Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 8305d79df160765e47bb9f28e91dac54b1bd9aaf29582f2512ef7a2f653d7372
     home: https://github.com/cagojeiger/relaygate
@@ -80,7 +93,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.6.tgz
     version: 0.2.6
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.649089582Z"
+    created: "2026-09-24T02:28:45.704289656Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: f1dd1864deab6290e85d7356ebec3dfee10c2dcfc77cb7b30778dd7f9727a690
     home: https://github.com/cagojeiger/relaygate
@@ -93,7 +106,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.5.tgz
     version: 0.2.5
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.648519353Z"
+    created: "2026-09-24T02:28:45.703837738Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 1e41a46da61d8faac7835bae599ad41a80116caec8b96bddba79ee083577dd2c
     home: https://github.com/cagojeiger/relaygate
@@ -106,7 +119,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.4.tgz
     version: 0.2.4
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.647805208Z"
+    created: "2026-09-24T02:28:45.703226154Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: e3ca189377f18cb02f8d796284fa33c84b66432fe135e32af275b07b15c41992
     home: https://github.com/cagojeiger/relaygate
@@ -119,7 +132,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.3.tgz
     version: 0.2.3
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.647180107Z"
+    created: "2026-09-24T02:28:45.702715909Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 7dbe50f34a01fcda27850317ed6ae21e7d750b40912b3db5431b871a57fad3d3
     home: https://github.com/cagojeiger/relaygate
@@ -132,7 +145,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.2.tgz
     version: 0.2.2
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.646531514Z"
+    created: "2026-09-24T02:28:45.702214097Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: a3776691620f03bfe2d6e4a0966629ef2bf542efe2c86385415f54aa3e918361
     home: https://github.com/cagojeiger/relaygate
@@ -145,7 +158,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.1.tgz
     version: 0.2.1
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.645891195Z"
+    created: "2026-09-24T02:28:45.701146605Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 7a40e3151862335b5fef98053d0920c83fda75893b8ff64c4d755bf7c6e055aa
     home: https://github.com/cagojeiger/relaygate
@@ -158,7 +171,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.2.0.tgz
     version: 0.2.0
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.645255495Z"
+    created: "2026-09-24T02:28:45.700631884Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 75946a64bc48fdf2429b10cf499acea7f7e8f97d5954004d108ce3915c8301bb
     home: https://github.com/cagojeiger/relaygate
@@ -171,7 +184,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.5.tgz
     version: 0.1.5
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.644171378Z"
+    created: "2026-09-24T02:28:45.700112196Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 1b2b4d119ea0fa7998a5533e8fb39c665a658ba9b1427febd9895b6ff12ae8b1
     home: https://github.com/cagojeiger/relaygate
@@ -184,7 +197,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.4.tgz
     version: 0.1.4
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.64334834Z"
+    created: "2026-09-24T02:28:45.699604475Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: 89bb2bc711df9aab4e488c77db10d2dd047b534fa1ebd153956404037f771695
     home: https://github.com/cagojeiger/relaygate
@@ -197,7 +210,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.3.tgz
     version: 0.1.3
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.642752304Z"
+    created: "2026-09-24T02:28:45.699074622Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: e0e5aedf6349d9f18c39b48027a812be6323000140b0151b7373e2d0670f0af9
     home: https://github.com/cagojeiger/relaygate
@@ -210,7 +223,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.2.tgz
     version: 0.1.2
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.642182015Z"
+    created: "2026-09-24T02:28:45.698575814Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: b8ec0a9fcd3f00a8e1fb56a0562af94ad80c9ee0e60440b3770fb2af45ba58b6
     home: https://github.com/cagojeiger/relaygate
@@ -223,7 +236,7 @@ entries:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.1.tgz
     version: 0.1.1
   - apiVersion: v2
-    created: "2026-09-23T14:22:13.641583374Z"
+    created: "2026-09-24T02:28:45.698028265Z"
     description: Memory-only RelayGate Gateway and RouteTable runtime
     digest: ff108465dd57104070d087cfbf615df0c5aaf6aacf7c2a086e57c558cf2b42e4
     home: https://github.com/cagojeiger/relaygate
@@ -235,4 +248,4 @@ entries:
     urls:
     - https://project-jelly.github.io/relaygate/relaygate-0.1.0.tgz
     version: 0.1.0
-generated: "2026-09-23T14:22:13.640877534Z"
+generated: "2026-09-24T02:28:45.697339687Z"
