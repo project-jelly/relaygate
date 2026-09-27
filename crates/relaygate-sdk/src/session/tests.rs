@@ -10,7 +10,9 @@ use std::{
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use relaygate_protocol::{BindingId, DEFAULT_MAX_FRAME_LEN, Frame, FrameCodec, PipeId, SessionId};
+use relaygate_transport::{ClientTlsConfig, ServerTlsConfig};
 use tokio::{
     net::TcpListener,
     sync::oneshot,
@@ -20,11 +22,55 @@ use tokio_util::codec::Framed;
 
 use super::{ReconnectBackoff, SessionHeartbeat};
 use crate::{
-    AccessToken, AccessTokenSource, Config, Destination, ErrorCode, ListenerStatus,
-    PeerObservation, Relay, RelayStatus,
+    AccessToken, AccessTokenSource, Config, Destination, ErrorCode, GatewayTransportConfig,
+    ListenerStatus, PeerObservation, Relay, RelayStatus,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
+
+#[tokio::test]
+async fn connect_timeout_covers_tls_and_welcome_together() -> TestResult {
+    let CertifiedKey { cert, signing_key } =
+        generate_simple_self_signed(vec!["localhost".to_owned()])?;
+    let certificate = cert.pem();
+    let server = ServerTlsConfig::server_authenticated(
+        certificate.as_bytes(),
+        signing_key.serialize_pem().as_bytes(),
+    )?;
+    let client = ClientTlsConfig::server_authenticated("localhost", certificate.as_bytes())?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let gateway = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        sleep(Duration::from_millis(300)).await;
+        let stream = server.accept(stream).await?;
+        let mut transport = Framed::new(stream, FrameCodec::new(DEFAULT_MAX_FRAME_LEN));
+        assert!(matches!(transport.next().await, Some(Ok(Frame::Hello))));
+        sleep(Duration::from_millis(300)).await;
+        let _ = transport
+            .send(Frame::Welcome {
+                session_id: SessionId::new(),
+            })
+            .await;
+        Ok::<(), Box<dyn StdError + Send + Sync>>(())
+    });
+
+    let config =
+        Config::with_transport(GatewayTransportConfig::tls_tcp(address.to_string(), client))
+            .with_connect_timeout(Duration::from_millis(500));
+    let result = Relay::connect(config).await;
+    assert!(
+        matches!(
+            &result,
+            Err(error) if error.code() == ErrorCode::DeadlineExceeded
+                && error.observation() == PeerObservation::NotObserved
+        ),
+        "connection result: {:?}",
+        result.as_ref().map(|_| ())
+    );
+    gateway.await??;
+    Ok(())
+}
 
 fn heartbeat() -> SessionHeartbeat {
     let config = Config::new_insecure_for_tests("127.0.0.1:0")
