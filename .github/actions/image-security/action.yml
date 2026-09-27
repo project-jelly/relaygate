@@ -1,0 +1,79 @@
+name: Image security gate
+description: Scan an immutable platform digest and preserve evidence before enforcing policy.
+inputs:
+  image:
+    description: Image repository without tag
+    required: true
+  digest:
+    description: Immutable platform manifest digest
+    required: true
+  architecture:
+    description: Linux CPU architecture
+    required: true
+  artifact:
+    description: Unique report artifact and SARIF category
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Record immutable scan target
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ inputs.digest }}
+        ARCHITECTURE: ${{ inputs.architecture }}
+        REPORT_DIR: reports/${{ inputs.artifact }}
+      run: |
+        mkdir -p "$REPORT_DIR"
+        [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+        jq -n --arg image "$IMAGE" --arg digest "$DIGEST" --arg architecture "$ARCHITECTURE" \
+          --arg resolved_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" '$ARGS.named' > "$REPORT_DIR/target.json"
+    - name: Scan image vulnerabilities and secrets
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      env:
+        TRIVY_IMAGE_SRC: remote
+        TRIVY_PLATFORM: linux/${{ inputs.architecture }}
+        TRIVY_LIST_ALL_PKGS: 'true'
+      with:
+        version: v0.74.0
+        scan-type: image
+        image-ref: ${{ inputs.image }}@${{ inputs.digest }}
+        scanners: vuln,secret
+        vuln-type: os,library
+        severity: HIGH,CRITICAL
+        ignore-unfixed: false
+        exit-code: '0'
+        format: json
+        output: reports/${{ inputs.artifact }}/trivy.json
+        timeout: 10m
+        cache: true
+    - name: Generate readable and SARIF reports
+      if: ${{ !cancelled() }}
+      shell: bash
+      env:
+        REPORT_DIR: reports/${{ inputs.artifact }}
+      run: |
+        trivy convert --format sarif --output "$REPORT_DIR/trivy.sarif" "$REPORT_DIR/trivy.json"
+        trivy convert --scanners vuln,secret --format table --output "$REPORT_DIR/trivy.txt" "$REPORT_DIR/trivy.json"
+        trivy --version > "$REPORT_DIR/trivy-version.txt"
+        cat "$REPORT_DIR/target.json" >> "$GITHUB_STEP_SUMMARY"
+    - name: Preserve image scan evidence
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact }}
+        path: reports/${{ inputs.artifact }}/
+        retention-days: 30
+        if-no-files-found: error
+    - name: Publish to GitHub Security
+      if: ${{ !cancelled() }}
+      uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+      with:
+        sarif_file: reports/${{ inputs.artifact }}/trivy.sarif
+        category: ${{ inputs.artifact }}
+    - name: Enforce vulnerability, secret and Rust inventory policy
+      if: ${{ !cancelled() }}
+      shell: bash
+      env:
+        REPORT: reports/${{ inputs.artifact }}/trivy.json
+      run: python3 .github/scripts/image_security.py "$REPORT"

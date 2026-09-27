@@ -123,12 +123,11 @@ docker compose --profile observability down --volumes --remove-orphans
 이미 배포된 package가 현재 소스와 일치하는지 확인하고, 일치하지 않거나 yanked 상태면 새 배포 전에 실패합니다.
 배포 없는 사전 검사는 깨끗한 checkout에서 `python3 .github/scripts/release_crates.py`로 실행합니다.
 
-## 릴리즈 이미지 취약점 보고서
+## CI/CD 보안
 
-[Released image security](.github/workflows/security-rescan.yml)는 매일 GHCR의 두 `latest` 이미지를
-digest로 고정해 Trivy로 검사합니다. `HIGH`·`CRITICAL`은 `Security → Code scanning`과 실행 artifact에 보고하며
-취약점 발견만으로 배포를 차단하지 않습니다. 이 검사는 현재 배포 이미지가 아닌 최신 릴리즈를 대상으로 합니다.
-Rust 바이너리 내부 crate의 탐지는 제한되므로 source dependency는 Dependabot으로 확인합니다.
+[공통 보안 기준](docs/security/ci-policy.md)에 PR 의존성 검사, 이미지 릴리스 gate,
+일일 재검사와 근거 문서를 정리합니다. 두 아키텍처의 취약점·secret 검사와 Rust 의존성
+inventory 확인을 통과한 digest만 릴리스 tag로 승격합니다. 실행 보고서는 30일 보관합니다.
 
 ## Helm
 
