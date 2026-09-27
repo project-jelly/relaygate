@@ -1,3 +1,6 @@
+import copy
+import json
+from pathlib import Path
 import unittest
 
 from release_provenance import predicate, verify, PREDICATE_TYPE
@@ -25,6 +28,23 @@ class ProvenanceTests(unittest.TestCase):
     def test_valid_verified_result_matches(self):
         expected = predicate(ENV)
         verify([{"verificationResult": {"statement": {"predicateType": PREDICATE_TYPE, "predicate": expected}}}], expected)
+
+    def test_observed_gh_verified_output_shape(self):
+        # Structure from a successful gh attestation verify response; values sanitized.
+        results = json.loads((Path(__file__).parent / "fixtures" / "gh-verified-attestation.json").read_text())
+        expected = results[0]["verificationResult"]["statement"]["predicate"]
+        verify(results, expected)
+        with self.assertRaises(ValueError):
+            verify(results, {"different": "predicate"})
+
+    def test_dual_type_fields_must_agree(self):
+        expected = predicate(ENV)
+        statement = {"predicate_type": PREDICATE_TYPE, "predicateType": PREDICATE_TYPE, "predicate": expected}
+        verify([{"verificationResult": {"statement": statement}}], expected)
+        for other in ["https://example.org/conflict", None]:
+            statement["predicateType"] = other
+            with self.subTest(other=other), self.assertRaises(ValueError):
+                verify([{"verificationResult": {"statement": statement}}], expected)
 
     def test_wrong_source_or_ci_or_workflow_are_rejected(self):
         expected = predicate(ENV)

@@ -44,11 +44,19 @@ def predicate(env):
     }
 
 
+def statement_predicate_type(statement):
+    snake_case = statement.get("predicate_type")
+    camel_case = statement.get("predicateType")
+    if "predicate_type" in statement and "predicateType" in statement and snake_case != camel_case:
+        raise ValueError("Conflicting predicate type fields in gh verification output")
+    return snake_case if "predicate_type" in statement else camel_case
+
+
 def verify(results, expected):
     # Only inspect gh's cryptographically verified statements, never raw bundles.
     for result in results:
         statement = result.get("verificationResult", {}).get("statement", {})
-        if statement.get("predicateType") == PREDICATE_TYPE and statement.get("predicate") == expected:
+        if statement_predicate_type(statement) == PREDICATE_TYPE and statement.get("predicate") == expected:
             return
     raise ValueError("No verified attestation matches the source, CI and build invocation")
 
