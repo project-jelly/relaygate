@@ -12,16 +12,24 @@
             }
           }
         ],
-        "predicate_type": "https://slsa.dev/provenance/v1",
+        "predicate_type": "https://project-jelly.github.io/attestations/release-evidence/v1",
         "predicate": {
-          "buildDefinition": {
-            "buildType": "https://example.org/build/v1",
-            "externalParameters": {
-              "source": {
-                "repository": "https://github.com/example/app",
-                "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-              }
-            }
+          "source": {
+            "repository": "https://github.com/project-jelly/relaygate",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "ci": {
+            "runId": "123",
+            "runAttempt": "1"
+          },
+          "workflow": {
+            "ref": "project-jelly/relaygate/.github/workflows/release.yml@refs/heads/main",
+            "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "invocation": {
+            "id": "https://github.com/project-jelly/relaygate/actions/runs/456/attempts/2",
+            "event": "workflow_run",
+            "runnerEnvironment": "github-hosted"
           }
         }
       }

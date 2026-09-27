@@ -1,4 +1,4 @@
-"""Bind a signed SLSA v1 statement to the checked-out source and trusted CI run.
+"""Bind signed custom release evidence to the checked-out source and trusted CI run.
 
 workflow_run's GITHUB_SHA identifies the workflow revision, not necessarily the
 source being built. Keep these identities separate in the signed predicate.
@@ -10,8 +10,7 @@ import os
 from pathlib import Path
 import re
 
-PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
-BUILD_TYPE = "https://project-jelly.github.io/buildtypes/container-release/v1"
+PREDICATE_TYPE = "https://project-jelly.github.io/attestations/release-evidence/v1"
 
 
 def predicate(env):
@@ -19,27 +18,21 @@ def predicate(env):
     workflow_sha = env["GITHUB_WORKFLOW_SHA"]
     if not all(re.fullmatch(r"[a-f0-9]{40}", sha) for sha in (source_sha, workflow_sha)):
         raise ValueError("Source and workflow revisions must be full commit SHAs")
+    event = env["GITHUB_EVENT_NAME"]
+    runner = env["RUNNER_ENVIRONMENT"]
+    if event not in {"workflow_run", "workflow_dispatch"}:
+        raise ValueError("Release evidence requires a CI-following or guarded manual workflow")
+    if runner != "github-hosted":
+        raise ValueError("Release evidence requires a GitHub-hosted runner")
     repository = f'{env["GITHUB_SERVER_URL"]}/{env["GITHUB_REPOSITORY"]}'
-    workflow_ref = env["GITHUB_WORKFLOW_REF"]
     return {
-        "buildDefinition": {
-            "buildType": BUILD_TYPE,
-            "externalParameters": {
-                "source": {"repository": repository, "commit": source_sha},
-                "ci": {"runId": env["CI_RUN_ID"], "runAttempt": env["CI_RUN_ATTEMPT"]},
-            },
-            "internalParameters": {
-                "workflow": {"ref": workflow_ref, "commit": workflow_sha},
-            },
-            "resolvedDependencies": [
-                {"uri": f"git+{repository}@{source_sha}", "digest": {"gitCommit": source_sha}},
-            ],
-        },
-        "runDetails": {
-            "builder": {"id": f'{env["GITHUB_SERVER_URL"]}/{workflow_ref}'},
-            "metadata": {
-                "invocationId": f'{repository}/actions/runs/{env["GITHUB_RUN_ID"]}/attempts/{env["GITHUB_RUN_ATTEMPT"]}'
-            },
+        "source": {"repository": repository, "commit": source_sha},
+        "ci": {"runId": env["CI_RUN_ID"], "runAttempt": env["CI_RUN_ATTEMPT"]},
+        "workflow": {"ref": env["GITHUB_WORKFLOW_REF"], "commit": workflow_sha},
+        "invocation": {
+            "id": f'{repository}/actions/runs/{env["GITHUB_RUN_ID"]}/attempts/{env["GITHUB_RUN_ATTEMPT"]}',
+            "event": event,
+            "runnerEnvironment": runner,
         },
     }
 

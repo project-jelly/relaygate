@@ -237,16 +237,16 @@ jobs:
       - name: Record source and workflow revisions
         run: python3 .github/scripts/release_provenance.py generate "$RUNNER_TEMP/provenance.json"
 
-      - name: Attest candidate image provenance
+      - name: Sign candidate release evidence
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-          predicate-type: https://slsa.dev/provenance/v1
+          predicate-type: https://project-jelly.github.io/attestations/release-evidence/v1
           predicate-path: ${{ runner.temp }}/provenance.json
 
-      - name: Verify provenance before promotion
+      - name: Verify signed release evidence before promotion
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
@@ -255,7 +255,7 @@ jobs:
           gh attestation verify "oci://$IMAGE@$DIGEST" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
-            --predicate-type https://slsa.dev/provenance/v1 \
+            --predicate-type https://project-jelly.github.io/attestations/release-evidence/v1 \
             --deny-self-hosted-runners --format json > "$RUNNER_TEMP/verified-provenance.json"
           python3 .github/scripts/release_provenance.py verify "$RUNNER_TEMP/verified-provenance.json"
 
