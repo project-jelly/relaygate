@@ -37,6 +37,13 @@ custom 증거는 소스·CI·workflow·실행 정보를 묶으며 GitHub의 표�
 특정 SLSA level 충족을 주장하지 않는다. `workflow_run`의 workflow revision과 빌드한
 source SHA를 구분하고, 검증된 statement 전체가 현재 릴리스와 정확히 일치해야 한다.
 
+증거의 canonical schema와 비교 계약은
+[`release_provenance.py`](../../.github/scripts/release_provenance.py)의 `predicate`/`verify`가 정의한다.
+모든 값은 문자열이며 `source`는 repository/commit, `ci`는 runId/runAttempt,
+`workflow`는 ref/commit, `invocation`은 id/event/runnerEnvironment를 포함한다.
+commit은 전체 40자리 SHA, event는 workflow_run/workflow_dispatch,
+runnerEnvironment는 github-hosted로 제한한다.
+
 Trivy는 OS·library 취약점과 secret의 HIGH/CRITICAL을 검사하며, fix가 없는 취약점도
 차단한다. 스캐너·DB·보고서 처리 실패나 SARIF 업로드 실패를 성공으로 숨기지 않는다.
 `cargo-auditable` 0.7.6으로 production binary에 crate metadata를 포함하고, 보고서에
