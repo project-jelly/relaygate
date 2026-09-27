@@ -26,9 +26,23 @@ NIST/SLSA 준수 인증이나 특정 SLSA level 달성을 주장하지 않는다
 1. amd64/arm64 이미지를 한 번 빌드해 tag 없이 GHCR의 digest로 보관한다.
 2. SBOM과 BuildKit provenance를 이미지 index에 포함한다.
 3. 두 platform manifest를 각각 Trivy 0.74.0으로 검사한다.
-4. 서명된 SLSA v1 predicate에 실제 소스 SHA, 신뢰한 CI run, workflow revision과
+4. 서명된 custom release-evidence predicate에 실제 소스 SHA, 신뢰한 CI run, workflow revision과
    빌드 실행을 각각 기록하고 저장소/workflow identity·digest·predicate를 검증한다.
 5. 전부 성공하면 검사한 동일 index digest에 version/latest tag를 붙이고 GitHub Release를 생성한다.
+
+BuildKit의 `provenance: mode=max`는 빌드 재료에 대한 SLSA provenance를 남긴다.
+별도 OIDC 서명은 `https://project-jelly.github.io/attestations/release-evidence/v1`
+type의 릴리스 증거를 기록한다. 이 URI는 type 식별자이며 문서 페이지 주소가 아니다.
+custom 증거는 소스·CI·workflow·실행 정보를 묶으며 GitHub의 표준 workflow build type이나
+특정 SLSA level 충족을 주장하지 않는다. `workflow_run`의 workflow revision과 빌드한
+source SHA를 구분하고, 검증된 statement 전체가 현재 릴리스와 정확히 일치해야 한다.
+
+증거의 canonical schema와 비교 계약은
+[`release_provenance.py`](../../.github/scripts/release_provenance.py)의 `predicate`/`verify`가 정의한다.
+모든 값은 문자열이며 `source`는 repository/commit, `ci`는 runId/runAttempt,
+`workflow`는 ref/commit, `invocation`은 id/event/runnerEnvironment를 포함한다.
+commit은 전체 40자리 SHA, event는 workflow_run/workflow_dispatch,
+runnerEnvironment는 github-hosted로 제한한다.
 
 Trivy는 OS·library 취약점과 secret의 HIGH/CRITICAL을 검사하며, fix가 없는 취약점도
 차단한다. 스캐너·DB·보고서 처리 실패나 SARIF 업로드 실패를 성공으로 숨기지 않는다.
