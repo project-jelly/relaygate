@@ -17,6 +17,8 @@ env:
   REGISTRY: ghcr.io
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+  CI_RUN_ID: ${{ github.event.workflow_run.id }}
+  CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
 
 jobs:
   changes:
@@ -24,6 +26,7 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.head_branch == github.event.repository.default_branch
     runs-on: ubuntu-latest
     outputs:
@@ -119,8 +122,12 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+      security-events: write
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.changes.outputs.matrix) }}
@@ -146,23 +153,6 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=${{ matrix.component }}-v$version" >> "$GITHUB_OUTPUT"
-
-          image="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}"
-          current_version=$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/contents/${{ matrix.version_file }}?ref=${{ github.event.repository.default_branch }}" \
-              --jq .content \
-              | base64 --decode \
-              | tr -d '[:space:]'
-          )
-          {
-            echo 'image_tags<<EOF'
-            echo "${image}:${version}"
-            if [ "$version" = "$current_version" ]; then
-              echo "${image}:latest"
-            fi
-            echo EOF
-          } >> "$GITHUB_OUTPUT"
 
       - name: Validate existing tag
         id: existing
@@ -192,14 +182,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build candidate image by digest
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: deploy/docker/Dockerfile
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
-          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           labels: |
@@ -208,7 +201,77 @@ jobs:
             org.opencontainers.image.revision=${{ env.RELEASE_SHA }}
             org.opencontainers.image.title=${{ matrix.image }}
             org.opencontainers.image.licenses=Apache-2.0
-          tags: ${{ steps.ver.outputs.image_tags }}
+
+      - name: Resolve candidate platform digests
+        id: platforms
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$INDEX_DIGEST" --raw > "$RUNNER_TEMP/index.json"
+          for architecture in amd64 arm64; do
+            digest=$(jq -er --arg architecture "$architecture" '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest]
+              | if length == 1 then .[0] else error("expected one platform manifest") end
+              | select(test("^sha256:[a-f0-9]{64}$"))' "$RUNNER_TEMP/index.json")
+            echo "$architecture=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Scan candidate amd64 image
+        uses: ./.github/actions/image-security
+        with:
+          image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          digest: ${{ steps.platforms.outputs.amd64 }}
+          architecture: amd64
+          artifact: trivy-release-${{ matrix.component }}-amd64
+
+      - name: Scan candidate arm64 image
+        if: ${{ !cancelled() && steps.platforms.outcome == 'success' }}
+        uses: ./.github/actions/image-security
+        with:
+          image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          digest: ${{ steps.platforms.outputs.arm64 }}
+          architecture: arm64
+          artifact: trivy-release-${{ matrix.component }}-arm64
+
+      - name: Record source and workflow revisions
+        run: python3 .github/scripts/release_provenance.py generate "$RUNNER_TEMP/provenance.json"
+
+      - name: Attest candidate image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance.json
+
+      - name: Verify provenance before promotion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          gh attestation verify "oci://$IMAGE@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners --format json > "$RUNNER_TEMP/verified-provenance.json"
+          python3 .github/scripts/release_provenance.py verify "$RUNNER_TEMP/verified-provenance.json"
+
+      - name: Promote the scanned digest to release tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION_FILE: ${{ matrix.version_file }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          LATEST_VERSION=$(gh api "repos/$GITHUB_REPOSITORY/contents/$VERSION_FILE?ref=$DEFAULT_BRANCH" \
+            --jq .content | base64 --decode | tr -d '[:space:]')
+          export LATEST_VERSION
+          .github/scripts/promote_image.sh
 
       - name: Create component GitHub Release
         env:
@@ -237,7 +300,7 @@ jobs:
           fi
           gh release create "${args[@]}"
 
-      - name: Keep recent 20 release images
+      - name: Keep recent 20 release images and latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
@@ -255,6 +318,7 @@ jobs:
             gh api --paginate \
               "${package_api}/versions?per_page=100" \
               --jq '.[]
+                | select((.metadata.container.tags | index("latest")) == null)
                 | select(any(.metadata.container.tags[]?;
                     test("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$")))
                 | [.created_at, (.id | tostring)]

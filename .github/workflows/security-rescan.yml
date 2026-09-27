@@ -47,7 +47,7 @@ jobs:
           echo "matrix=$(jq -sc '{include: .}' "$targets")" >> "$GITHUB_OUTPUT"
 
   scan:
-    name: Report ${{ matrix.component }} / ${{ matrix.architecture }}
+    name: Scan ${{ matrix.component }} / ${{ matrix.architecture }}
     needs: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -62,75 +62,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Record immutable scan target
-        env:
-          SCAN_TARGET: ${{ toJSON(matrix) }}
-        run: |
-          mkdir -p reports
-          printf '%s\n' "$SCAN_TARGET" > reports/target.json
-
-      - name: Scan released image vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_IMAGE_SRC: remote
-          TRIVY_PLATFORM: linux/${{ matrix.architecture }}
+      - name: Scan released platform digest
+        uses: ./.github/actions/image-security
         with:
-          version: v0.74.0
-          scan-type: image
-          image-ref: ${{ matrix.image }}@${{ matrix.digest }}
-          scanners: vuln
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          exit-code: '0'
-          format: json
-          output: reports/trivy.json
-          timeout: 10m
-          cache: true
-
-      - name: Generate SARIF and readable report
-        run: |
-          trivy convert --format sarif --output reports/trivy.sarif reports/trivy.json
-          trivy convert --scanners vuln --format table --output reports/trivy.txt reports/trivy.json
-          trivy --version > reports/trivy-version.txt
-          {
-            jq -r '"### \(.component) / linux/\(.architecture)",
-              "", "Source: `\(.image):latest`", "",
-              "Index: `\(.index_digest)`", "",
-              "Scanned: `\(.image)@\(.digest)`", "",
-              "Resolved at: \(.resolved_at)", ""' reports/target.json
-            jq -r '[.Results[]?.Vulnerabilities[]?] as $findings |
-              "| Severity | Package findings | Fix available |",
-              "| --- | ---: | ---: |",
-              (["CRITICAL", "HIGH"][] as $severity |
-                [$findings[] | select(.Severity == $severity)] as $matches |
-                "| \($severity) | \($matches | length) | \([$matches[] | select((.FixedVersion // "") != "")] | length) |")' reports/trivy.json
-            echo
-            echo 'Report only: findings do not block releases or deployments.'
-            echo 'These are latest released images; current production deployment is not verified.'
-            echo 'Current Rust binaries lack cargo-auditable metadata; embedded crate coverage is incomplete. Dependabot covers source dependencies.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Preserve reports
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: trivy-${{ matrix.component }}-${{ matrix.architecture }}
-          path: reports/
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: Publish to GitHub Security
-        id: sarif
-        if: ${{ !cancelled() && hashFiles('reports/trivy.sarif') != '' }}
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
-        with:
-          sarif_file: reports/trivy.sarif
-          category: trivy-latest-${{ matrix.component }}-${{ matrix.architecture }}
-
-      - name: Explain unavailable Security upload
-        if: ${{ !cancelled() && steps.sarif.outcome == 'failure' }}
-        run: |
-          echo '::warning::GitHub Security upload failed. Download the report artifact for results.'
-          echo 'GitHub Security upload failed; results remain available in the run artifacts.' >> "$GITHUB_STEP_SUMMARY"
+          image: ${{ matrix.image }}
+          digest: ${{ matrix.digest }}
+          architecture: ${{ matrix.architecture }}
+          artifact: trivy-latest-${{ matrix.component }}-${{ matrix.architecture }}

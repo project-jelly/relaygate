@@ -22,6 +22,20 @@ env:
   SHELLCHECK_SHA256: 6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87
 
 jobs:
+  vulnerability:
+    name: Vulnerability Check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain and cargo-audit
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit locked dependencies
+        run: cargo audit --file Cargo.lock
+
   hygiene:
     name: Hygiene
     runs-on: ubuntu-latest
@@ -54,7 +68,7 @@ jobs:
           for script in tests/kind/run.sh tests/kind/certificates.sh; do
             bash -n "$script"
           done
-          shellcheck -x tests/kind/run.sh tests/kind/certificates.sh
+          shellcheck -x tests/kind/run.sh tests/kind/certificates.sh .github/scripts/promote_image.sh
 
       - name: Check Helm release policy
         env:
@@ -591,6 +605,36 @@ jobs:
             test "$(docker image inspect --format '{{.Config.User}}' "$image")" = '10001:10001'
             test "$(docker image inspect --format '{{.Config.WorkingDir}}' "$image")" = '/'
           done
+
+      - name: Scan production binary dependencies
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: docker
+          TRIVY_LIST_ALL_PKGS: 'true'
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: relaygate-gateway:ci
+          scanners: vuln,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          format: json
+          output: production-image-scan.json
+          timeout: 10m
+
+      - name: Require Rust dependency inventory and clean image findings
+        run: python3 .github/scripts/image_security.py production-image-scan.json
+
+      - name: Preserve production image scan
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-production-image-pr
+          path: production-image-scan.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Start two RouteTables, three Gateways, Listeners, and continuity Pipes
         run: |

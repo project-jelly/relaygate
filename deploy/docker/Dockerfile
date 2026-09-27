@@ -1,5 +1,7 @@
 FROM rust:1.96.1-bookworm AS builder
 
+RUN cargo install cargo-auditable --version 0.7.6 --locked
+
 WORKDIR /workspace
 
 COPY Cargo.toml Cargo.lock ./
@@ -7,7 +9,7 @@ COPY crates ./crates
 COPY examples ./examples
 COPY tools/test-contract ./tools/test-contract
 
-RUN cargo build --locked --release \
+RUN cargo auditable build --locked --release \
     --bin relaygate-server \
     --bin relaygate-echo-listener \
     --bin relaygate-echo-probe
