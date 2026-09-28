@@ -68,6 +68,7 @@ pub(super) async fn relay_supervisor(
                         session
                     }
                     Err(error) => {
+                        inner.set_relay_error(Some(error.clone()));
                         if let Some(episode) = reconnect_episode.as_mut() {
                             episode.record_attempt("error");
                         }
@@ -228,5 +229,5 @@ enum RelayFrameAction {
     RegistrationSucceeded,
     SettlementChanged,
     Reconcile,
-    Stop,
+    Stop(crate::Error),
 }

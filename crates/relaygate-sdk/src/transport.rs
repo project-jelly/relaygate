@@ -118,13 +118,15 @@ impl GatewayTransportConfig {
     pub(crate) async fn connect(&self) -> Result<BoxedIo> {
         let stream = TcpStream::connect(self.gateway_addr())
             .await
-            .map_err(|error| Error::unavailable(format!("Gateway connection failed: {error}")))?;
+            .map_err(|error| {
+                Error::transport_unavailable(format!("Gateway connection failed: {error}"))
+            })?;
         let _ = stream.set_nodelay(true);
 
         match &self.kind {
             GatewayTransport::TlsTcp { tls, .. } => {
                 tls.connect_boxed(stream).await.map_err(|error| {
-                    Error::unavailable(format!("Gateway TLS handshake failed: {error}"))
+                    Error::transport_unavailable(format!("Gateway TLS handshake failed: {error}"))
                 })
             }
             GatewayTransport::InsecureTcp { .. } => Ok(insecure_boxed(stream)),

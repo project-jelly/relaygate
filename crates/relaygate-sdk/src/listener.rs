@@ -93,6 +93,15 @@ impl Listener {
         *self.state.status.borrow()
     }
 
+    /// Returns the error for the current registration failure, if any.
+    ///
+    /// Successful publication and close clear the error. An active Relay
+    /// session does not imply that this Listener's registration is active.
+    #[must_use]
+    pub fn last_error(&self) -> Option<Error> {
+        self.state.last_error()
+    }
+
     /// Subscribes to coalesced Listener status changes.
     #[must_use]
     pub fn subscribe_status(&self) -> ListenerStatusSubscription {

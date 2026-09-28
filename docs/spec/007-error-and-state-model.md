@@ -20,11 +20,39 @@ failure입니다.
 | `RESOURCE_EXHAUSTED` | session/binding/Pipe/dial/queue/frame/authorization 상한, PUBLISH/DIAL rate 예산 | 부하 감소·budget refill 뒤 새 operation |
 | `CANCELLED` | owner operation/session 종료 | caller 결정 |
 | `PROTOCOL_ERROR` | version, frame order·ownership 위반 | 구현/config 수정 |
-| `INTERNAL` | internal invariant/lock/task failure | terminal |
+| `INTERNAL` | internal invariant/lock/task failure, Gateway 내부 dependency 인증·권한 실패 | 내부 설정·진단 확인 |
 | `ALREADY_EXISTS` | 같은 Relay·Destination Listener 중복 | 기존 Listener 종료 |
 
 `UNAUTHENTICATED`와 `PERMISSION_DENIED`는 해당 PUBLISH/DIAL만 거절하고 RelaySession을 인증 주체로
 승격하지 않습니다. 이 두 인증 실패의 DIAL observation은 `NOT_OBSERVED`입니다.
+
+SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 주체를 보장하지 않습니다. `message()`는 진단용이며 분기 조건이 아닙니다.
+
+| origin | 조건 | application 대응 |
+| --- | --- | --- |
+| `Sdk` | 로컬 입력·상태·자원 처리 | code에 따라 입력·부하·lifecycle 확인 |
+| `TokenSource` | application token 공급 실패·deadline | token backend 복구; 영구적 정책 변경이면 Listener 종료 |
+| `Transport` | TCP·TLS·HELLO/WELCOME·session loss | endpoint·TLS 설정 또는 Gateway 연결 확인 |
+| `Gateway` | Gateway 실패 응답 | `UNAUTHENTICATED`는 JWT profile·key·claims·expiry, `PERMISSION_DENIED`는 grant 확인 |
+
+`PUBLISH/DIAL`의 `UNAUTHENTICATED`·`PERMISSION_DENIED` 응답은 SDK가 action별 고정 진단 메시지로
+표시하며 Gateway 응답의 임의 텍스트와 token 값을 복사하지 않습니다. 이전 Gateway가 전달하는 내부 실패도
+가능하므로 문구는 앱 JWT 문제로 단정하지 않습니다. Wire `ErrorCode`의 종류·discriminant는 유지합니다.
+
+| 경로 | code / origin / observation |
+| --- | --- |
+| initial `SESSION_REJECTED` | Gateway 응답 code / `Gateway` / `NOT_OBSERVED` |
+| `PUBLISH/DIAL` token source deadline | `DEADLINE_EXCEEDED` / `TokenSource` / `NOT_OBSERVED` |
+| session 대기 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED` |
+| committed `PUBLISH/DIAL` 응답 deadline | `DEADLINE_EXCEEDED` / `Transport` / `MAYBE_OBSERVED` |
+| runtime frame/order 위반 | `PROTOCOL_ERROR` / `Transport` / operation별 commit 상태 |
+| heartbeat·frame write deadline | `DEADLINE_EXCEEDED` / `Transport` / operation별 commit 상태 |
+| TCP EOF·frame I/O 실패 | `UNAVAILABLE` / `Transport` / operation별 commit 상태 |
+| RT Resolve·peer OPEN 준비/응답의 내부 인증·권한 실패 | public DIAL은 `INTERNAL`; 내부 경계의 원래 code 유지 |
+
+Session 종료 원인은 Relay `RECONNECTING` 통지 전 기록하고 영향을 받는 작업에도 전달합니다. 자동 reconnect와
+Listener republish 여부는 lifecycle이 결정하며, `Error::is_retryable()`은 caller의 새 control operation을 위한
+힌트입니다. Pipe I/O의 observation·retry hint는 payload 재전송의 근거가 아닙니다.
 
 ## SDK와 Binding 상태
 

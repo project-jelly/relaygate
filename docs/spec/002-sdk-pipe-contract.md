@@ -8,9 +8,11 @@
 | `Relay::listen(Destination, AccessTokenSource)` | active Listener |
 | `Relay::dial(Destination, AccessTokenSource)` | established Pipe |
 | `Relay::status()` / `Relay::subscribe_status()` | latest Relay status snapshot/subscription |
+| `Relay::last_error()` | 최근 session 종료 또는 reconnect 실패의 `Error`; 새 session `ACTIVE` 또는 close 시 제거 |
 | `Relay::wait_ready()` | current Relay session active 또는 closed error |
 | `Listener::accept()` | distinct incoming Pipe |
 | `Listener::status()` / `Listener::subscribe_status()` | latest Listener status snapshot/subscription |
+| `Listener::last_error()` | 현재 등록 실패의 `Error`; `ACTIVE` 또는 close 시 제거 |
 | `Listener::close()` | 해당 Listener 종료 |
 | `Relay::close()` | 전체 SDK runtime 종료 |
 
@@ -70,6 +72,10 @@ async callback(action, Destination) -> PUBLISH 또는 DIAL
 | `SDK-019` | returned Listener의 republish token source 실패는 Relay당 하나의 bounded exponential backoff+jitter timer로 병합한다. timer가 준비되기 전 다른 reconcile trigger는 suspended Listener를 재시도하지 않는다. 전체 Listener가 다시 active이면 backoff를 초기화하고 대기 중 timer를 무효화한다. |
 | `SDK-020` | Relay live Pipe 상한은 outgoing DIAL의 pending 단계부터 returned Pipe 수명까지와 incoming Pipe를 함께 계산하고 모든 실패·cancel·drop·terminal 경로에서 점유를 반환한다. |
 | `SDK-022` | Relay와 Listener status subscription은 SDK 소유 wrapper이며 raw watch channel을 노출하지 않는다. `current()`는 latest snapshot을 반환하고 subscription cursor를 소비하며, `changed()`는 그 이후 coalescing된 latest state를 반환한다. Relay `ACTIVE`는 current `HELLO/WELCOME` transport session 설치를 뜻하며 Listener republish/`BLOCKED`와 분리된다. Relay `CLOSED`는 terminal이고 `ACTIVE`로 역행하지 않는다. |
+| `SDK-023` | Relay `last_error()`는 session 종료 원인을 `RECONNECTING` 통지 전에 기록하고 이후 실패한 reconnect 시도로 교체한다. Listener는 현재 등록 실패를 조회한다. 새 session/등록의 `ACTIVE`와 close는 해당 오류를 제거한다. Status subscription은 latest-state 조회이며 시도별 오류 이력이 아니다. |
+| `SDK-024` | `Error::origin()`은 SDK가 관측한 `Sdk/TokenSource/Transport/Gateway` 경계다. TokenSource 실패는 `UNAVAILABLE`, 공급 deadline은 `DEADLINE_EXCEEDED`다. Initial listen의 외부 deadline과 token future deadline은 같은 진행 단계·origin·observation으로 종료한다. Session 대기 deadline은 `Transport`다. Wire code 종류는 유지한다. |
+| `SDK-025` | `SESSION_REJECTED`는 session 미수립인 `NOT_OBSERVED` 오류다. `UNAVAILABLE/RESOURCE_EXHAUSTED`는 backoff 뒤 새 연결을 허용한다. Committed DIAL의 불확실한 실패와 Pipe payload는 자동 재실행하지 않는다. |
+| `SDK-026` | Session 종료 원인의 code·origin·message는 Relay와 영향을 받는 Listener·Pipe·DIAL까지 보존한다. Observation은 각 operation의 commit 상태로 결정하며 Pipe I/O에서는 payload receipt가 아니다. |
 
 | 상황 | 결과 |
 | --- | --- |
