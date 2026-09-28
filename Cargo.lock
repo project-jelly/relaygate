@@ -1310,6 +1310,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-util",
+ "rcgen",
  "relaygate-destination",
  "relaygate-protocol",
  "relaygate-transport",

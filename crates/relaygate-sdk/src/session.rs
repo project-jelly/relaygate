@@ -24,24 +24,29 @@ pub(crate) struct EstablishedSession {
 }
 
 pub(crate) async fn establish(config: &Config) -> Result<EstablishedSession> {
-    crate::observability::observe("session_connect", establish_inner(config)).await
+    crate::observability::observe("session_connect", async {
+        timeout(config.connect_timeout, establish_inner(config))
+            .await
+            .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
+    })
+    .await
 }
 
 async fn establish_inner(config: &Config) -> Result<EstablishedSession> {
-    let stream = config.transport.connect(config.connect_timeout).await?;
+    let stream = config.transport.connect().await?;
     let mut transport = Framed::with_capacity(
         stream,
         FrameCodec::new(DEFAULT_MAX_FRAME_LEN),
         SDK_FRAME_INITIAL_CAPACITY,
     );
     transport.set_backpressure_boundary(SDK_FRAME_WRITE_BACKPRESSURE_BOUNDARY);
-    timeout(config.connect_timeout, transport.send(Frame::Hello))
+    transport
+        .send(Frame::Hello)
         .await
-        .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
         .map_err(|error| Error::unavailable(format!("session hello failed: {error}")))?;
-    let frame = timeout(config.connect_timeout, transport.next())
+    let frame = transport
+        .next()
         .await
-        .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
         .ok_or_else(|| Error::unavailable("Gateway closed before WELCOME"))?
         .map_err(|error| {
             Error::new(
