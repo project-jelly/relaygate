@@ -50,6 +50,9 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 | TCP EOF·frame I/O 실패 | `UNAVAILABLE` / `Transport` / operation별 commit 상태 |
 | RT Resolve·peer OPEN 준비/응답의 내부 인증·권한 실패 | public DIAL은 `INTERNAL`; 내부 경계의 원래 code 유지 |
 
+`PUBLISHED` 처리 중에도 `ACTIVE` 전이와 commit 표시 제거는 같은 상태 lock에서 수행합니다.
+그 전에 initial deadline이 먼저 종료하면 `MAYBE_OBSERVED`를 유지합니다.
+
 Session 종료 원인은 Relay `RECONNECTING` 통지 전 기록하고 영향을 받는 작업에도 전달합니다. 자동 reconnect와
 Listener republish 여부는 lifecycle이 결정하며, `Error::is_retryable()`은 caller의 새 control operation을 위한
 힌트입니다. Pipe I/O의 observation·retry hint는 payload 재전송의 근거가 아닙니다.

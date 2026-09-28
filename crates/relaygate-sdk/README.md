@@ -82,7 +82,8 @@ subscriptions coalesce changes, so observers receive the latest state rather
 than an audit log of every transition. `last_error()` returns the current
 registration failure or the latest Relay session/reconnect failure. The session
 cause is recorded before `Reconnecting`; subsequent failed attempts replace it.
-Successful recovery and close clear it.
+Relay recovery and close clear its error. A Listener clears its error when a new
+PUBLISH is committed, registration becomes active, or it is closed.
 Relay status changes do not notify observers for every failed reconnect attempt,
 so read `Relay::last_error()` when inspecting a reconnecting Relay.
 

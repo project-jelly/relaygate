@@ -31,6 +31,7 @@ rust = [
   "session::tests::diagnostics::session_wait_deadlines_are_transport_failures",
   "session::tests::diagnostics::session_writer_preserves_timeout_and_io_failure",
   "listener::state::tests::initial_deadline_uses_registration_progress",
+  "listener::runtime::frame::tests::published_response_keeps_commit_visible_until_activation",
   "error::tests::protocol_io_failure_remains_transport_unavailable",
   "state::remote_tests::dependency_authorization_failures_are_internal_to_sdk_callers",
   "access_token::tests::token_source_failure_identifies_application_dependency",

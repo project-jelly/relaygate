@@ -121,7 +121,8 @@ impl FrameContext<'_, '_> {
         self.session
             .pending_by_destination
             .remove(&pending.state.destination);
-        pending.state.finish_registration_attempt();
+        // Keep commit visible until activate updates status under the state lock.
+        // A concurrent initial deadline must not turn this PUBLISH into NotObserved.
         if is_current_desired(self.inner, &pending.state) && pending.state.activate() {
             tracing::debug!(
                 component = "sdk",
