@@ -17,9 +17,13 @@ pub(super) async fn reconcile_registrations(
     established: &mut EstablishedSession,
     session: &mut RelaySessionState,
     session_cancel: &CancellationToken,
-) -> bool {
+) -> crate::Result<()> {
     let Some(desired) = snapshot_desired_by_destination(inner) else {
-        return false;
+        return Err(Error::new(
+            ErrorCode::Internal,
+            PeerObservation::NotObserved,
+            "Listener registry lock is poisoned",
+        ));
     };
     let abandoned_committed_registration = session.pending.values().any(|pending| {
         pending.committed
@@ -29,7 +33,11 @@ pub(super) async fn reconcile_registrations(
                 || *pending.state.status.borrow() == ListenerStatus::Closed)
     });
     if abandoned_committed_registration {
-        return false;
+        return Err(Error::new(
+            ErrorCode::Cancelled,
+            PeerObservation::NotObserved,
+            "RelaySession ended to discard a cancelled committed PUBLISH",
+        ));
     }
     let registered_destinations = session.registrations.keys().cloned().collect::<Vec<_>>();
     for destination in registered_destinations {
@@ -49,9 +57,13 @@ pub(super) async fn reconcile_registrations(
             continue;
         };
         let Some(request_id) = session.next_request_id() else {
-            return false;
+            return Err(Error::new(
+                ErrorCode::ResourceExhausted,
+                PeerObservation::NotObserved,
+                "RelaySession exhausted request IDs",
+            ));
         };
-        if send_bounded(
+        send_bounded(
             &mut established.transport,
             Frame::Unpublish {
                 request_id,
@@ -60,11 +72,7 @@ pub(super) async fn reconcile_registrations(
             inner.config.operation_timeout,
             session_cancel,
         )
-        .await
-        .is_err()
-        {
-            return false;
-        }
+        .await?;
     }
 
     for state in desired.values() {
@@ -97,10 +105,17 @@ pub(super) async fn reconcile_registrations(
             if state.was_returned() {
                 state.set_status(
                     ListenerStatus::Suspended,
-                    Some(Error::deadline(PeerObservation::NotObserved)),
+                    Some(Error::transport_deadline(
+                        "PUBLISH deadline exceeded while waiting for a RelaySession",
+                    )),
                 );
             } else {
-                inner.fail_initial_listener(state, Error::deadline(PeerObservation::NotObserved));
+                inner.fail_initial_listener(
+                    state,
+                    Error::transport_deadline(
+                        "PUBLISH deadline exceeded while waiting for a RelaySession",
+                    ),
+                );
             }
             continue;
         }
@@ -118,6 +133,9 @@ pub(super) async fn reconcile_registrations(
             }
             continue;
         };
+        if !state.begin_token_supply() {
+            continue;
+        }
         session.pending.insert(
             request_id,
             PendingRegistration {
@@ -141,7 +159,7 @@ pub(super) async fn reconcile_registrations(
                     }),
                 )
                 .await
-                .map_err(|_| Error::deadline(PeerObservation::NotObserved))
+                .map_err(|_| Error::token_source_deadline())
                 .and_then(|result| result);
                 (request_id, result)
             }
@@ -149,7 +167,11 @@ pub(super) async fn reconcile_registrations(
         );
     }
 
-    !inner.cancel.is_cancelled()
+    if inner.cancel.is_cancelled() {
+        Err(Error::closed())
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) async fn commit_registration_token(
@@ -159,28 +181,28 @@ pub(super) async fn commit_registration_token(
     established: &mut EstablishedSession,
     session: &mut RelaySessionState,
     session_cancel: &CancellationToken,
-) -> bool {
+) -> crate::Result<()> {
     let Some(mut pending) = session.pending.remove(&request_id) else {
-        return true;
+        return Ok(());
     };
     let state = Arc::clone(&pending.state);
     session.pending_by_destination.remove(&state.destination);
     if !is_current_desired(inner, &state) || *state.status.borrow() == ListenerStatus::Closed {
-        return true;
+        return Ok(());
     }
     let token = match token {
         Ok(token) if pending.deadline > Instant::now() => token,
         Ok(_) => {
-            handle_token_source_error(inner, &state, Error::deadline(PeerObservation::NotObserved));
-            return true;
+            handle_token_source_error(inner, &state, Error::token_source_deadline());
+            return Ok(());
         }
         Err(error) => {
             handle_token_source_error(inner, &state, error);
-            return true;
+            return Ok(());
         }
     };
     if !state.begin_registration_commit() {
-        return true;
+        return Ok(());
     }
     pending.committed = true;
     let deadline = pending.deadline;
@@ -201,7 +223,6 @@ pub(super) async fn commit_registration_token(
         session_cancel,
     )
     .await
-    .is_ok()
 }
 
 fn handle_token_source_error(inner: &RelayInner, state: &Arc<ListenerState>, error: Error) {
