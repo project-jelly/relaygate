@@ -58,7 +58,7 @@ accept -> rate budget -> transport + handshake slot -> TLS(5s) -> HELLO/response
 | 경계 | 규칙 |
 | --- | --- |
 | 256 기본값 | 보호 상한; 처리량 보장 아님 |
-| 초기 `Relay::connect` | 단일 시도; admission 거절 뒤 재시도는 application 결정 |
+| 초기 `Relay::connect` | 전체 `connect_timeout` 내 일시 실패 재시도; TLS 인증서·protocol 오류는 즉시 반환 |
 | managed reconnect | SDK backoff로 분산 |
 | readiness 조회·기존 session | budget 소비 없음·유지 |
 | rate budget | 실패·종료 시 반환하지 않음; 시간으로만 refill; t초 통과 수 ≤ `burst + rate * t` |

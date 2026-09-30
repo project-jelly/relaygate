@@ -11,7 +11,7 @@ failure입니다.
 | code | 대표 조건 | 새 operation 조건 |
 | --- | --- | --- |
 | `INVALID_ARGUMENT` | Destination/config/frame 오류 | 입력 변경 |
-| `UNAUTHENTICATED` | access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 또는 token source 재인증 요구 | 새 유효 token/config 또는 application 인증 복구 |
+| `UNAUTHENTICATED` | TLS 인증서 검증 또는 access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 또는 token source 재인증 요구 | 유효한 TLS 인증서·trust/config, token 또는 application 인증 복구 |
 | `PERMISSION_DENIED` | 유효한 token에 요청 action·exact Destination 권한 없음 또는 token source 권한 거절 | grant 또는 application 권한 복구 |
 | `NOT_FOUND` | current Binding 없음 | 상태 변경 |
 | `FAILED_PRECONDITION` | self Binding만 존재, closed object | 전제 변경 |
@@ -19,11 +19,11 @@ failure입니다.
 | `DEADLINE_EXCEEDED` | operation·authorization bounded deadline 만료 | observation 확인 |
 | `RESOURCE_EXHAUSTED` | session/binding/Pipe/dial/queue/frame/authorization 상한, PUBLISH/DIAL rate 예산 | 부하 감소·budget refill 뒤 새 operation |
 | `CANCELLED` | owner operation/session 종료 | caller 결정 |
-| `PROTOCOL_ERROR` | version, frame order·ownership 위반 | 구현/config 수정 |
+| `PROTOCOL_ERROR` | TLS/ALPN 불일치, version, frame order·ownership 위반 | 구현/config 수정 |
 | `INTERNAL` | internal invariant/lock/task failure, Gateway 내부 dependency 인증·권한 실패 | 내부 설정·진단 확인 |
 | `ALREADY_EXISTS` | 같은 Relay·Destination Listener 중복 | 기존 Listener 종료 |
 
-`UNAUTHENTICATED`와 `PERMISSION_DENIED`는 해당 PUBLISH/DIAL만 거절하고 RelaySession을 인증 주체로
+Gateway가 반환한 `UNAUTHENTICATED`와 `PERMISSION_DENIED`는 해당 PUBLISH/DIAL만 거절하고 RelaySession을 인증 주체로
 승격하지 않습니다. 이 두 인증 실패의 DIAL observation은 `NOT_OBSERVED`입니다.
 
 SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 주체를 보장하지 않습니다. `message()`는 진단용이며 분기 조건이 아닙니다.
@@ -41,6 +41,8 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 | 경로 | code / origin / observation |
 | --- | --- |
+| TLS 인증서 검증·peer certificate alert | `UNAUTHENTICATED` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
+| TLS protocol·ALPN 불일치 | `PROTOCOL_ERROR` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
 | initial connect 전체 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED`; 계측은 `error/deadline_exceeded` |
 | initial `SESSION_REJECTED` | Gateway 응답 code / `Gateway` / `NOT_OBSERVED` |
 | token source 일시 실패 | `UNAVAILABLE` / `TokenSource` / `NOT_OBSERVED` |
@@ -59,6 +61,11 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 초기 connect와 initial listen/dial의 token 공급은 `NOT_OBSERVED` 일시 오류를 기존 deadline 안에서 자동 재시도합니다.
 전체 deadline은 시도마다 갱신하지 않으며, 시간 소진은 해당 origin의 `DEADLINE_EXCEEDED`입니다.
+초기 TLS 인증서·protocol/ALPN 실패는 즉시 반환하며 message 문자열로 분류하지 않습니다. TLS 1.3의
+handshake 직후 HELLO/WELCOME I/O에 도착한 certificate alert도 동일하게 분류합니다. 일반 I/O·미분류 TLS 실패는
+`UNAVAILABLE`을 유지합니다. 이미 반환된 Relay는 인증서 오류에도 `RECONNECTING`에서 backoff를 계속하며
+`last_error()`로 원인을 노출합니다. 서버 인증서 복구 시 기존 trust로 검증한 뒤 재연결·Listener republish를 수행합니다.
+SDK trust/client identity 변경은 새 Config와 Relay를 요구하며 자동 reload하지 않습니다.
 Gateway의 initial PUBLISH/DIAL 실패 응답은 기존대로 caller에 반환합니다.
 `dynamic_with_errors`의 인증·권한 실패는 재시도하지 않습니다. 기존 `dynamic`의 실패는 일시 실패로 유지합니다.
 TokenSource 메시지는 action과 조치 안내만 포함하며 backend 응답·credential을 복사하지 않습니다.
