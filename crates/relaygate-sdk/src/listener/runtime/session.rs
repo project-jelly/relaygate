@@ -53,10 +53,10 @@ pub(super) async fn run_relay_session(
         registration_succeeded: false,
     };
 
-    loop {
+    let failure = loop {
         if session.needs_reconcile {
-            if !session.reconcile().await {
-                break;
+            if let Err(error) = session.reconcile().await {
+                break error;
             }
             session.needs_reconcile = false;
             session.settlement_dirty = true;
@@ -68,7 +68,11 @@ pub(super) async fn run_relay_session(
         let registration_deadline = session.registration_deadline();
         let flow = tokio::select! {
             biased;
-            _ = session.session_cancel.cancelled() => break,
+            _ = session.session_cancel.cancelled() => break if inner.cancel.is_cancelled() {
+                Error::closed()
+            } else {
+                Error::transport_unavailable("RelaySession cancelled during a control operation")
+            },
             incoming = session.established.transport.next() => session.on_inbound(incoming).await,
             () = wait_for_heartbeat(session.heartbeat.next_deadline()) => {
                 session.on_heartbeat_deadline().await
@@ -76,7 +80,7 @@ pub(super) async fn run_relay_session(
             _ = wait_for_registration_deadline(registration_deadline), if registration_deadline.is_some() => {
                 session.timed_out_request = registration_deadline.map(|(request_id, _)| request_id);
                 session.session_cancel.cancel();
-                break;
+                break Error::transport_deadline("PUBLISH response deadline exceeded");
             }
             _ = session.inner.reconcile.notified() => {
                 session.needs_reconcile = true;
@@ -89,7 +93,7 @@ pub(super) async fn run_relay_session(
                 }
             }
             command = commands.recv() => {
-                let Some(command) = command else { break; };
+                let Some(command) = command else { break Error::closed(); };
                 session.on_command(command).await
             }
             cancelled = cancellations.recv() => {
@@ -99,7 +103,7 @@ pub(super) async fn run_relay_session(
                 }
             }
             frame = outbound_rx.recv() => {
-                let Some(frame) = frame else { break; };
+                let Some(frame) = frame else { break Error::closed(); };
                 session.on_outbound(frame).await
             }
             abandoned = abandoned_rx.recv() => {
@@ -109,18 +113,20 @@ pub(super) async fn run_relay_session(
                 }
             }
         };
-        if let Break(()) = flow {
-            break;
+        if let Break(error) = flow {
+            break error;
         }
-    }
+    };
 
-    fail_queued_dials(&mut commands);
+    inner.set_relay_error(Some(failure.clone()));
+    fail_queued_dials(&mut commands, &failure);
     cleanup_relay_session(
         session.established.id,
         inner,
         session.state,
         session.timed_out_request,
         session.registration_succeeded,
+        failure,
     )
     .await
 }
@@ -151,7 +157,7 @@ impl RelayLoop<'_> {
         )
     }
 
-    async fn reconcile(&mut self) -> bool {
+    async fn reconcile(&mut self) -> crate::Result<()> {
         reconcile_registrations(
             self.inner,
             &mut self.established,
@@ -202,14 +208,27 @@ impl RelayLoop<'_> {
     async fn on_inbound(
         &mut self,
         incoming: Option<Result<Frame, ProtocolError>>,
-    ) -> ControlFlow<()> {
-        let Some(Ok(frame)) = incoming else {
-            return Break(());
+    ) -> ControlFlow<Error> {
+        let frame = match incoming {
+            Some(Ok(frame)) => frame,
+            Some(Err(error)) => {
+                return Break(Error::from_protocol(
+                    error,
+                    "RelaySession frame read failed",
+                ));
+            }
+            None => {
+                return Break(Error::transport_unavailable(
+                    "Gateway closed the RelaySession transport",
+                ));
+            }
         };
         self.heartbeat.observe_inbound(&frame);
         if self.heartbeat.response_timed_out() {
             self.log_heartbeat_timeout();
-            return Break(());
+            return Break(Error::transport_deadline(
+                "RelaySession heartbeat response timed out",
+            ));
         }
         let session_id = self.established.id;
         let action = handle_relay_frame(
@@ -234,18 +253,20 @@ impl RelayLoop<'_> {
             }
             RelayFrameAction::SettlementChanged => self.settlement_dirty = true,
             RelayFrameAction::Reconcile => self.needs_reconcile = true,
-            RelayFrameAction::Stop => return Break(()),
+            RelayFrameAction::Stop(error) => return Break(error),
         }
         Continue(())
     }
 
-    async fn on_heartbeat_deadline(&mut self) -> ControlFlow<()> {
+    async fn on_heartbeat_deadline(&mut self) -> ControlFlow<Error> {
         let Some(frame) = self.heartbeat.on_deadline() else {
             self.log_heartbeat_timeout();
-            return Break(());
+            return Break(Error::transport_deadline(
+                "RelaySession heartbeat response timed out",
+            ));
         };
-        if self.link().send(frame).await.is_err() {
-            return Break(());
+        if let Err(error) = self.link().send(frame).await {
+            return Break(error);
         }
         self.heartbeat.mark_probe_committed();
         Continue(())
@@ -255,7 +276,7 @@ impl RelayLoop<'_> {
         &mut self,
         request_id: u64,
         token: crate::Result<BearerToken>,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<Error> {
         let committed = commit_registration_token(
             request_id,
             token,
@@ -266,10 +287,13 @@ impl RelayLoop<'_> {
         )
         .await;
         self.settlement_dirty = true;
-        if committed { Continue(()) } else { Break(()) }
+        match committed {
+            Ok(()) => Continue(()),
+            Err(error) => Break(error),
+        }
     }
 
-    async fn on_command(&mut self, command: RelayCommand) -> ControlFlow<()> {
+    async fn on_command(&mut self, command: RelayCommand) -> ControlFlow<Error> {
         let RelayCommand::Dial {
             connection_id,
             destination,
@@ -305,7 +329,7 @@ impl RelayLoop<'_> {
                 slot.insert(pending);
             }
         }
-        if self
+        if let Err(error) = self
             .link()
             .send(Frame::Dial {
                 connection_id,
@@ -313,14 +337,13 @@ impl RelayLoop<'_> {
                 access_token,
             })
             .await
-            .is_err()
         {
-            return Break(());
+            return Break(error);
         }
         Continue(())
     }
 
-    async fn on_cancelled(&mut self, pipe_id: PipeId) -> ControlFlow<()> {
+    async fn on_cancelled(&mut self, pipe_id: PipeId) -> ControlFlow<Error> {
         let mut removed = false;
         if let Some(pending) = self.state.pending_dials.remove(&pipe_id.connection_id()) {
             removed = true;
@@ -334,13 +357,13 @@ impl RelayLoop<'_> {
             removed = true;
             pipe.state.close_normal();
         }
-        if removed && self.link().send(Frame::Cancel { pipe_id }).await.is_err() {
-            return Break(());
+        if removed && let Err(error) = self.link().send(Frame::Cancel { pipe_id }).await {
+            return Break(error);
         }
         Continue(())
     }
 
-    async fn on_outbound(&mut self, frame: Frame) -> ControlFlow<()> {
+    async fn on_outbound(&mut self, frame: Frame) -> ControlFlow<Error> {
         let terminal_pipe = match &frame {
             Frame::Close { pipe_id } | Frame::Reset { pipe_id, .. } => Some(*pipe_id),
             Frame::Fin { pipe_id }
@@ -354,8 +377,8 @@ impl RelayLoop<'_> {
             }
             _ => None,
         };
-        if self.link().send(frame).await.is_err() {
-            return Break(());
+        if let Err(error) = self.link().send(frame).await {
+            return Break(error);
         }
         if let Some(pipe_id) = terminal_pipe {
             self.state.pipes.remove(&pipe_id);
@@ -363,11 +386,11 @@ impl RelayLoop<'_> {
         Continue(())
     }
 
-    async fn on_abandoned(&mut self, pipe_id: PipeId) -> ControlFlow<()> {
+    async fn on_abandoned(&mut self, pipe_id: PipeId) -> ControlFlow<Error> {
         if self.state.pipes.remove(&pipe_id).is_some()
-            && self.link().send(Frame::Close { pipe_id }).await.is_err()
+            && let Err(error) = self.link().send(Frame::Close { pipe_id }).await
         {
-            return Break(());
+            return Break(error);
         }
         Continue(())
     }
@@ -375,14 +398,14 @@ impl RelayLoop<'_> {
 
 /// DIALs still queued when the session ends never reached the wire, so they
 /// are reported as `NOT_OBSERVED` instead of being dropped as uncertain.
-fn fail_queued_dials(commands: &mut mpsc::Receiver<RelayCommand>) {
+fn fail_queued_dials(commands: &mut mpsc::Receiver<RelayCommand>, failure: &Error) {
     commands.close();
     while let Ok(command) = commands.try_recv() {
         match command {
             RelayCommand::Dial { response, .. } => {
-                let _ = response.send(Err(Error::unavailable(
-                    "RelaySession ended before DIAL was sent",
-                )));
+                let _ = response.send(Err(failure
+                    .clone()
+                    .with_observation(PeerObservation::NotObserved)));
             }
         }
     }

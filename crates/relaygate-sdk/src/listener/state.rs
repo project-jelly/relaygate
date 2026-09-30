@@ -23,6 +23,7 @@ pub(super) struct RelayInner {
     pub(super) desired: StdMutex<HashMap<Destination, Arc<ListenerState>>>,
     pub(super) current: watch::Sender<Option<Arc<RelaySession>>>,
     pub(super) status: watch::Sender<RelayStatus>,
+    pub(super) last_error: StdMutex<Option<Error>>,
     pub(super) reconcile: Arc<Notify>,
     pub(super) cancel: CancellationToken,
     pub(super) lifetime: Weak<RuntimeLifetime>,
@@ -50,15 +51,23 @@ pub(super) struct ListenerState {
 
 pub(super) struct ListenerRuntime {
     pub(super) lifecycle: ListenerLifecycle,
-    pub(super) registration_committed: bool,
+    registration_progress: RegistrationProgress,
     pub(super) last_error: Option<Error>,
+}
+
+#[derive(Clone, Copy, Default)]
+enum RegistrationProgress {
+    #[default]
+    Waiting,
+    TokenSource,
+    Committed,
 }
 
 impl ListenerRuntime {
     pub(super) const fn new(lifecycle: ListenerLifecycle) -> Self {
         Self {
             lifecycle,
-            registration_committed: false,
+            registration_progress: RegistrationProgress::Waiting,
             last_error: None,
         }
     }
@@ -173,6 +182,10 @@ impl RelayInner {
     }
 
     pub(super) fn set_relay_status(&self, status: RelayStatus) {
+        if self.cancel.is_cancelled() || matches!(status, RelayStatus::Active | RelayStatus::Closed)
+        {
+            self.set_relay_error(None);
+        }
         let mut previous = status;
         let mut applied = status;
         let changed = self.status.send_if_modified(|current| {
@@ -197,6 +210,25 @@ impl RelayInner {
                 "Relay status changed"
             );
         }
+    }
+
+    pub(super) fn set_relay_error(&self, error: Option<Error>) {
+        let mut last_error = self
+            .last_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *last_error = if self.cancel.is_cancelled() {
+            None
+        } else {
+            error
+        };
+    }
+
+    pub(super) fn relay_error(&self) -> Option<Error> {
+        self.last_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(super) fn detach_listener(&self, state: &Arc<ListenerState>) {
@@ -390,7 +422,7 @@ impl ListenerState {
             return false;
         }
         runtime.lifecycle = ListenerLifecycle::Terminal;
-        runtime.registration_committed = false;
+        runtime.registration_progress = RegistrationProgress::Waiting;
         self.publish(&mut runtime, ListenerStatus::Closed, Some(error));
         true
     }
@@ -404,12 +436,12 @@ impl ListenerState {
         match runtime.lifecycle {
             ListenerLifecycle::Pending => {
                 runtime.lifecycle = ListenerLifecycle::Terminal;
-                runtime.registration_committed = false;
+                runtime.registration_progress = RegistrationProgress::Waiting;
                 self.publish(&mut runtime, ListenerStatus::Closed, Some(initial_error));
                 true
             }
             ListenerLifecycle::Returned => {
-                runtime.registration_committed = false;
+                runtime.registration_progress = RegistrationProgress::Waiting;
                 self.publish(
                     &mut runtime,
                     ListenerStatus::Suspended,
@@ -423,7 +455,7 @@ impl ListenerState {
 
     pub(super) fn handle_precommit_session_end(&self, recovery_error: Error) {
         let mut runtime = self.runtime();
-        runtime.registration_committed = false;
+        runtime.registration_progress = RegistrationProgress::Waiting;
         match runtime.lifecycle {
             ListenerLifecycle::Pending => {
                 self.publish(&mut runtime, ListenerStatus::Registering, None);
@@ -445,7 +477,7 @@ impl ListenerState {
             return;
         }
         runtime.lifecycle = ListenerLifecycle::Terminal;
-        runtime.registration_committed = false;
+        runtime.registration_progress = RegistrationProgress::Waiting;
         self.publish(&mut runtime, ListenerStatus::Blocked, Some(error));
     }
 
@@ -457,7 +489,7 @@ impl ListenerState {
         if runtime.lifecycle == ListenerLifecycle::Terminal {
             return false;
         }
-        runtime.registration_committed = false;
+        runtime.registration_progress = RegistrationProgress::Waiting;
         self.publish(&mut runtime, ListenerStatus::Active, None);
         true
     }
@@ -470,8 +502,17 @@ impl ListenerState {
             return;
         }
         runtime.lifecycle = ListenerLifecycle::Terminal;
-        runtime.registration_committed = false;
+        runtime.registration_progress = RegistrationProgress::Waiting;
         self.publish(&mut runtime, ListenerStatus::Closed, error);
+    }
+
+    pub(super) fn begin_token_supply(&self) -> bool {
+        let mut runtime = self.runtime();
+        if runtime.lifecycle == ListenerLifecycle::Terminal {
+            return false;
+        }
+        runtime.registration_progress = RegistrationProgress::TokenSource;
+        true
     }
 
     pub(super) fn begin_registration_commit(&self) -> bool {
@@ -479,13 +520,13 @@ impl ListenerState {
         if runtime.lifecycle == ListenerLifecycle::Terminal {
             return false;
         }
-        runtime.registration_committed = true;
+        runtime.registration_progress = RegistrationProgress::Committed;
         self.publish(&mut runtime, ListenerStatus::Registering, None);
         true
     }
 
     pub(super) fn finish_registration_attempt(&self) {
-        self.runtime().registration_committed = false;
+        self.runtime().registration_progress = RegistrationProgress::Waiting;
     }
 
     fn terminate_initial_operation(
@@ -502,13 +543,27 @@ impl ListenerState {
         if keep_active && *self.status.borrow() == ListenerStatus::Active {
             return None;
         }
-        let observation = if std::mem::take(&mut runtime.registration_committed) {
+        let progress = std::mem::take(&mut runtime.registration_progress);
+        let observation = if matches!(progress, RegistrationProgress::Committed) {
             PeerObservation::MaybeObserved
         } else {
             PeerObservation::NotObserved
         };
         runtime.lifecycle = ListenerLifecycle::Terminal;
-        let error = Error::new(code, observation, message);
+        let error = if code == ErrorCode::DeadlineExceeded {
+            match progress {
+                RegistrationProgress::TokenSource => Error::token_source_deadline(),
+                RegistrationProgress::Waiting => Error::transport_deadline(
+                    "PUBLISH deadline exceeded while waiting for a RelaySession",
+                ),
+                RegistrationProgress::Committed => {
+                    Error::transport_deadline("PUBLISH response deadline exceeded")
+                        .with_observation(observation)
+                }
+            }
+        } else {
+            Error::new(code, observation, message)
+        };
         self.publish(&mut runtime, ListenerStatus::Closed, Some(error.clone()));
         Some(error)
     }

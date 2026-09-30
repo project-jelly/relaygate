@@ -110,6 +110,7 @@ impl Relay {
             desired: StdMutex::new(HashMap::new()),
             current,
             status,
+            last_error: StdMutex::new(None),
             reconcile: Arc::new(Notify::new()),
             cancel,
             lifetime: Arc::downgrade(&lifetime),
@@ -273,7 +274,7 @@ impl Relay {
                             }),
                         )
                         .await
-                        .map_err(|_| Error::deadline(PeerObservation::NotObserved))??;
+                        .map_err(|_| Error::token_source_deadline())??;
                         supplied_access_token = Some(access_token.clone());
                         access_token
                     }
@@ -330,7 +331,8 @@ impl Relay {
                             }
                             Err(_) => {
                                 session.cancel.cancel();
-                                Err(Error::deadline(PeerObservation::MaybeObserved))
+                                Err(Error::transport_deadline("DIAL response deadline exceeded")
+                                    .with_observation(PeerObservation::MaybeObserved))
                             }
                         };
                     }
@@ -343,7 +345,7 @@ impl Relay {
                             tokio::select! {
                                 _ = self.inner.cancel.cancelled() => return Err(Error::closed()),
                                 _ = sleep_until(deadline) => {
-                                    return Err(Error::deadline(PeerObservation::NotObserved));
+                                    return Err(Error::transport_deadline("DIAL deadline exceeded while waiting for a RelaySession"));
                                 }
                                 changed = current.changed() => {
                                     if changed.is_err() { return Err(Error::closed()); }
@@ -359,7 +361,7 @@ impl Relay {
             tokio::select! {
                 _ = self.inner.cancel.cancelled() => return Err(Error::closed()),
                 _ = sleep_until(deadline) => {
-                    return Err(Error::deadline(PeerObservation::NotObserved));
+                    return Err(Error::transport_deadline("DIAL deadline exceeded while waiting for a RelaySession"));
                 }
                 changed = current.changed() => {
                     if changed.is_err() { return Err(Error::closed()); }
@@ -378,6 +380,16 @@ impl Relay {
     #[must_use]
     pub fn status(&self) -> RelayStatus {
         *self.inner.status.borrow()
+    }
+
+    /// Returns the latest session failure or failed reconnect attempt, if any.
+    ///
+    /// The error is cleared when a new session becomes active or the Relay is
+    /// closed. The session failure is recorded before publishing Reconnecting;
+    /// later failed attempts replace it. This is a snapshot, not an error history.
+    #[must_use]
+    pub fn last_error(&self) -> Option<Error> {
+        self.inner.relay_error()
     }
 
     /// Subscribes to coalesced Relay status changes.

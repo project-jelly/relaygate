@@ -1,8 +1,8 @@
-use std::{fmt, time::Duration};
+use std::fmt;
 
 use relaygate_transport::insecure_boxed;
 use relaygate_transport::{BoxedIo, ClientTlsConfig};
-use tokio::{net::TcpStream, time::timeout};
+use tokio::net::TcpStream;
 
 use crate::{Error, ErrorCode, PeerObservation, Result};
 
@@ -115,22 +115,22 @@ impl GatewayTransportConfig {
         Ok(())
     }
 
-    pub(crate) async fn connect(&self, connect_timeout: Duration) -> Result<BoxedIo> {
-        let stream = timeout(connect_timeout, TcpStream::connect(self.gateway_addr()))
+    pub(crate) async fn connect(&self) -> Result<BoxedIo> {
+        let stream = TcpStream::connect(self.gateway_addr())
             .await
-            .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
-            .map_err(|error| Error::unavailable(format!("Gateway connection failed: {error}")))?;
+            .map_err(|error| {
+                Error::transport_unavailable(format!("Gateway connection failed: {error}"))
+            })?;
         let _ = stream.set_nodelay(true);
 
-        timeout(connect_timeout, async {
-            match &self.kind {
-                GatewayTransport::TlsTcp { tls, .. } => tls.connect_boxed(stream).await,
-                GatewayTransport::InsecureTcp { .. } => Ok(insecure_boxed(stream)),
+        match &self.kind {
+            GatewayTransport::TlsTcp { tls, .. } => {
+                tls.connect_boxed(stream).await.map_err(|error| {
+                    Error::transport_unavailable(format!("Gateway TLS handshake failed: {error}"))
+                })
             }
-        })
-        .await
-        .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
-        .map_err(|error| Error::unavailable(format!("Gateway TLS handshake failed: {error}")))
+            GatewayTransport::InsecureTcp { .. } => Ok(insecure_boxed(stream)),
+        }
     }
 
     fn gateway_addr(&self) -> &str {

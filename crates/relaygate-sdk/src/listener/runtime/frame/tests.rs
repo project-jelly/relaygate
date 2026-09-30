@@ -67,6 +67,7 @@ async fn full_listener_queue_rejects_offer_immediately_and_preserves_session_fra
         )])),
         current,
         status: relay_status,
+        last_error: StdMutex::new(None),
         reconcile: Arc::new(Notify::new()),
         cancel: CancellationToken::new(),
         lifetime: Weak::<RuntimeLifetime>::new(),
@@ -166,6 +167,7 @@ async fn dropped_pipe_keeps_its_entry_until_close_is_sent() -> TestResult {
         desired: StdMutex::new(HashMap::new()),
         current,
         status: relay_status,
+        last_error: StdMutex::new(None),
         reconcile: Arc::new(Notify::new()),
         cancel: CancellationToken::new(),
         lifetime: Weak::<RuntimeLifetime>::new(),
@@ -228,5 +230,126 @@ async fn dropped_pipe_keeps_its_entry_until_close_is_sent() -> TestResult {
             .is_err(),
         "no RESET may be sent for DATA that raced a local close"
     );
+    Ok(())
+}
+
+#[test]
+fn published_response_keeps_commit_visible_until_activation() -> TestResult {
+    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let limits = config.resource_limits;
+    let destination: Destination = "inference/stt.seoul".parse()?;
+    let (incoming_tx, incoming_rx) = mpsc::channel(1);
+    let (status, _) = watch::channel(ListenerStatus::Registering);
+    let listener = Arc::new(ListenerState {
+        destination: destination.clone(),
+        access_token_source: AccessTokenSource::static_token(AccessToken::new("grant")?),
+        status,
+        incoming_tx,
+        incoming_rx: tokio::sync::Mutex::new(incoming_rx),
+        initial_deadline: Instant::now() + Duration::from_secs(10),
+        runtime: StdMutex::new(ListenerRuntime::new(ListenerLifecycle::Pending)),
+        live_pipe_slots: Arc::new(Semaphore::new(1)),
+    });
+    let session_id = SessionId::new();
+    let (current, _) = watch::channel(Some(Arc::new(RelaySession {
+        id: session_id,
+        next_connection_id: tokio::sync::Mutex::new(1),
+        commands: mpsc::channel(1).0,
+        cancellations: mpsc::unbounded_channel().0,
+        cancel: CancellationToken::new(),
+    })));
+    let (relay_status, _) = watch::channel(RelayStatus::Active);
+    let inner = Arc::new(RelayInner {
+        config,
+        desired: StdMutex::new(HashMap::from([(
+            destination.clone(),
+            Arc::clone(&listener),
+        )])),
+        current,
+        status: relay_status,
+        last_error: StdMutex::new(None),
+        reconcile: Arc::new(Notify::new()),
+        cancel: CancellationToken::new(),
+        lifetime: Weak::<RuntimeLifetime>::new(),
+        resources: RelayResources::new(limits),
+        reconnect_degraded: std::sync::atomic::AtomicBool::new(false),
+        desired_settlement_calls: AtomicU64::new(0),
+        republish_retry_epoch: Arc::new(AtomicU64::new(0)),
+        republish_backoff: Arc::new(StdMutex::new(ReconnectBackoff::new(
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        ))),
+    });
+    assert!(listener.begin_registration_commit());
+    let mut state = RelaySessionState::new();
+    state.pending.insert(
+        1,
+        super::super::PendingRegistration {
+            state: Arc::clone(&listener),
+            committed: true,
+            deadline: listener.initial_deadline,
+        },
+    );
+    state.pending_by_destination.insert(destination, 1);
+
+    // Hold the registry so PUBLISHED cannot activate the Listener yet. Expiry
+    // must still see the committed operation while the handler waits here.
+    let registry = inner.desired.lock().map_err(|_| "registry poisoned")?;
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let handler_inner = Arc::clone(&inner);
+    let handler = std::thread::spawn(move || -> TestResult {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let (sdk_io, _peer_io) = duplex(4096);
+            let mut transport = Framed::new(Box::new(sdk_io) as BoxedIo, FrameCodec::default());
+            let (outbound, _outbound_rx) = session_outbound_channel(1);
+            let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+            let cancel = CancellationToken::new();
+            started_tx.send(())?;
+            let _ = handle_relay_frame(
+                Frame::Published {
+                    request_id: 1,
+                    binding_id: BindingId::new(),
+                },
+                session_id,
+                &mut state,
+                &outbound,
+                &abandoned,
+                &handler_inner,
+                &mut SessionLink::new(&mut transport, Duration::from_secs(1), &cancel),
+            )
+            .await;
+            Ok(())
+        })
+    });
+    started_rx.recv_timeout(Duration::from_secs(2))?;
+    // Allow the handler to reach the held registry lock. Correctness below is
+    // independent of scheduling: it must retain commit even if not started yet.
+    std::thread::sleep(Duration::from_millis(30));
+    let expiry_inner = Arc::clone(&inner);
+    let expiry_listener = Arc::clone(&listener);
+    let expiry = std::thread::spawn(move || {
+        expiry_inner.expire_initial_listener(
+            &expiry_listener,
+            crate::ErrorCode::DeadlineExceeded,
+            "deadline",
+        )
+    });
+    let wait_started = std::time::Instant::now();
+    while *listener.status.borrow() != ListenerStatus::Closed
+        && wait_started.elapsed() < Duration::from_secs(2)
+    {
+        std::thread::yield_now();
+    }
+    drop(registry);
+    let error = expiry
+        .join()
+        .map_err(|_| "expiry thread panicked")?
+        .ok_or("expiry did not terminate the pending listen")?;
+    handler.join().map_err(|_| "handler thread panicked")??;
+    assert_eq!(error.observation(), crate::PeerObservation::MaybeObserved);
+    assert!(!error.is_retryable());
     Ok(())
 }
