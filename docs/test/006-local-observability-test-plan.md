@@ -89,3 +89,25 @@ CI는 `relaygate-data-rtt` artifact에 고정 workload의 측정 결과를 보�
 
 Topology/fault acceptance가 correctness를 검증하고 metric·log가 같은 terminal/current state를 보고하는지
 관측 probe가 대조합니다.
+
+
+## SDK 장시간 TLS 복구 검증 (opt-in)
+
+```sh
+python3 .github/scripts/sdk_recovery_soak.py --seconds 1800
+```
+
+| 항목 | 검증 |
+| --- | --- |
+| 실행 | Linux/macOS 단일 프로세스, 실제 local Gateway·TLS, 동일한 publisher/caller Relay 유지 |
+| 부하 | 복구 전후 각각 8개 동시 Pipe, 4 KiB 양방향 데이터·FIN 검증 |
+| 장애 | 매 회 Gateway 종료·재시작; 5회마다 잘못된 인증서 거절 후 정상 인증서 복구 |
+| 복구 | old Pipe 종료, Listener 자동 재등록, 새 Pipe 성공, 동적 publish JWT 재발급 |
+| 정리 | 매 회 sessions=2, bindings=1, live Pipe/pending=0; task 수 기준+4 이내, 종료 시 시작 기준으로 복귀 |
+| 자원 | 10초 간격 RSS·열린 FD, 회차별 Tokio task 수. RSS는 warm-up 이후 추세를 별도로 판정 |
+| 결과 | `target/sdk-recovery-soak/{metadata.json,runtime.log,resources.jsonl,result.json}` |
+| 범위 | local TLS·SDK/Gateway 복구. 분산 RT/peer·production 부하·다일간 누수 보장은 별도 |
+
+테스트는 기본 CI에서 `ignored`이며 릴리즈 전 명시적으로 실행한다. macOS Cargo linker 설정이 필요하면
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools`를 지정한다. RSS 상승을 누수로 단정하지 않으며,
+지속 증가 또는 FD/task 누적이 있으면 릴리즈를 보류하고 profile한다.
