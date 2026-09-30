@@ -646,3 +646,50 @@ fn peer_opened_after_session_removal_resets_the_stream() -> TestResult {
     assert_eq!(fx.live_pipes(), 0);
     Ok(())
 }
+
+#[test]
+fn dependency_authorization_failures_are_internal_to_sdk_callers() -> TestResult {
+    for code in [ErrorCode::Unauthenticated, ErrorCode::PermissionDenied] {
+        for phase in 0..3 {
+            let mut fx = Fixture::new()?;
+            let (identity, _) = fx.dial(1)?;
+            let actions = if phase == 2 {
+                fx.resolve_to_peer(identity)?;
+                let key = fx.key(0);
+                fx.state.peer_open_committed(identity, key);
+                fx.state.peer_open_failed(
+                    key,
+                    identity,
+                    code,
+                    PeerObservation::NotObserved,
+                    "internal credential details",
+                )
+            } else if phase == 1 {
+                fx.resolve_to_peer(identity)?;
+                fx.state.peer_open_commit_failed(
+                    identity,
+                    code,
+                    PeerObservation::NotObserved,
+                    "internal credential details",
+                )
+            } else {
+                fx.state
+                    .route_failed(identity, code, "internal credential details")
+            };
+            assert_eq!(
+                dial_failed(&actions, fx.caller),
+                Some((ErrorCode::Internal, PeerObservation::NotObserved))
+            );
+            assert_eq!(fx.attempts(), 0);
+            let message = sdk_frames(&actions)
+                .find_map(|(_, frame)| match frame {
+                    Frame::DialFailed { message, .. } => Some(message.as_str()),
+                    _ => None,
+                })
+                .ok_or("missing DIAL_FAILED")?;
+            assert!(message.contains("internal dependency"));
+            assert!(!message.contains("internal credential details"));
+        }
+    }
+    Ok(())
+}

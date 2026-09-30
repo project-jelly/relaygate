@@ -43,18 +43,56 @@ let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 # let _ = tokens;
 ```
 
+## Handling errors
+
+Use `Error::code()` and `Error::origin()` for application decisions.
+Origin identifies the boundary observed by the SDK, not the ultimate root cause. `message()`
+is diagnostic text, not a value to match. `PeerObservation` remains separate;
+`is_retryable()` applies only to a new control operation, never Pipe payloads.
+
+| Origin and code | Application response |
+| --- | --- |
+| `TokenSource` + `Unavailable`/`DeadlineExceeded` | Restore the application token provider; a returned Listener retries publication. Close it if application policy permanently revoked the grant. |
+| `Gateway` + `Unauthenticated` | Issue a valid operation JWT; check profile, key, claims, and expiry. |
+| `Gateway` + `PermissionDenied` | Check the token's action, Namespace, Destination scope, and permission count. |
+| `Gateway` + `Internal` | Check Gateway diagnostics; internal RouteTable/peer admission authentication failures cannot be repaired by refreshing an application JWT. |
+| `Transport` + `Unavailable`/`DeadlineExceeded` | Check Gateway reachability and TLS configuration; the Relay reconnects after an established session ends. |
+
+Gateway authorization failures use SDK-controlled diagnostic messages that also
+allow for older Gateways forwarding dependency failures. Raw JWTs
+and untrusted Gateway authorization text are not included in those messages.
+
+| Failure | Classification |
+| --- | --- |
+| Token supply deadline, for both publish and dial | `TokenSource` + `DeadlineExceeded` |
+| Waiting for a Relay session | `Transport` + `DeadlineExceeded` |
+| Runtime frame/order violation | `Transport` + `ProtocolError` |
+| Heartbeat or frame-write deadline | `Transport` + `DeadlineExceeded` |
+| TCP EOF or frame I/O failure | `Transport` + `Unavailable` |
+
+An initial `SessionRejected` has `NotObserved` metadata because no session was
+admitted. `Unavailable` and `ResourceExhausted` permit a new connection attempt
+after backoff. A committed DIAL remains `MaybeObserved` when its result is lost.
+
 ## Publish and accept Pipes
 
 `Relay::listen` waits for the initial Gateway-local binding. A returned
 `Listener` is active and remains desired while the SDK reconnects. Status
 subscriptions coalesce changes, so observers receive the latest state rather
-than an audit log of every transition.
+than an audit log of every transition. `last_error()` returns the current
+registration failure or the latest Relay session/reconnect failure. The session
+cause is recorded before `Reconnecting`; subsequent failed attempts replace it.
+Relay recovery and close clear its error. A Listener clears its error when a new
+PUBLISH is committed, registration becomes active, or it is closed.
+Relay status changes do not notify observers for every failed reconnect attempt,
+so read `Relay::last_error()` when inspecting a reconnecting Relay.
 
 ```no_run
 use relaygate_sdk::{
     AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
     Config, Destination, ListenerStatus, Relay, RelayStatus,
 };
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 # async fn token_from_application_backend(
@@ -79,12 +117,18 @@ let relay_observer = tokio::spawn(async move {
 
 let destination: Destination = "inference/stt.seoul".parse()?;
 let tokens = AccessTokenSource::dynamic(token_from_application_backend);
-let listener = relay.listen(destination, tokens).await?;
+let listener = Arc::new(relay.listen(destination, tokens).await?);
+let observed_listener = Arc::clone(&listener);
 let mut listener_status = listener.subscribe_status();
 assert_eq!(listener_status.current(), ListenerStatus::Active);
 let listener_observer = tokio::spawn(async move {
     while let Some(status) = listener_status.changed().await {
         eprintln!("Listener status: {status:?}");
+        if matches!(status, ListenerStatus::Suspended | ListenerStatus::Blocked) {
+            if let Some(error) = observed_listener.last_error() {
+                eprintln!("Listener registration error: {:?}/{:?}", error.origin(), error.code());
+            }
+        }
         if status == ListenerStatus::Closed {
             break;
         }
@@ -109,8 +153,9 @@ let _ = relay_observer.await;
 
 `Relay::dial` opens one new opaque byte-stream `Pipe`. A committed dial and
 Pipe payloads are never replayed by the SDK. After a session interruption,
-`wait_ready` can wait for the managed Relay session to become active before the
-application chooses whether to start a new operation.
+`dial` waits for a new session within its operation deadline. `wait_ready`
+can be used separately when an application needs transport readiness; it does
+not wait for Listener registration and has no built-in deadline.
 
 ```no_run
 use relaygate_sdk::{
@@ -139,7 +184,6 @@ let observer = tokio::spawn(async move {
     }
 });
 
-relay.wait_ready().await?;
 let destination: Destination = "inference/stt.seoul".parse()?;
 let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 let mut pipe = relay.dial(destination, tokens).await?;

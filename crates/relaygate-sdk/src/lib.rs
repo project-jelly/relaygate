@@ -17,7 +17,7 @@ pub use access_token::{
     AccessTokenSourceError,
 };
 pub use config::{Config, ResourceLimits};
-pub use error::{Error, ErrorCode, PeerObservation, Result};
+pub use error::{Error, ErrorCode, ErrorOrigin, PeerObservation, Result};
 pub use listener::{
     Listener, ListenerStatus, ListenerStatusSubscription, Relay, RelayStatus,
     RelayStatusSubscription,

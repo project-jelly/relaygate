@@ -78,12 +78,28 @@ pub enum PeerObservation {
     Observed,
 }
 
+/// Boundary at which the SDK observed a failure, not its ultimate root cause.
+/// Combine this with [`ErrorCode`] to choose an application response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorOrigin {
+    /// SDK validation, lifecycle, or local resource handling.
+    Sdk,
+    /// Application-owned access token source.
+    TokenSource,
+    /// Network, TLS, or Relay session transport.
+    Transport,
+    /// A failure response received from the Gateway.
+    Gateway,
+}
+
 /// A terminal SDK operation error.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{code:?}: {message} ({observation:?})")]
 pub struct Error {
     code: ErrorCode,
     observation: PeerObservation,
+    origin: ErrorOrigin,
     message: String,
 }
 
@@ -99,8 +115,72 @@ impl Error {
         Self {
             code,
             observation,
+            origin: ErrorOrigin::Sdk,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn with_origin(mut self, origin: ErrorOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    pub(crate) fn with_observation(mut self, observation: PeerObservation) -> Self {
+        self.observation = observation;
+        self
+    }
+
+    pub(crate) fn from_protocol(error: relaygate_protocol::ProtocolError, context: &str) -> Self {
+        let code = match &error {
+            relaygate_protocol::ProtocolError::Io(_) => ErrorCode::Unavailable,
+            _ => ErrorCode::ProtocolError,
+        };
+        Self::new(
+            code,
+            PeerObservation::NotObserved,
+            format!("{context}: {error}"),
+        )
+        .with_origin(ErrorOrigin::Transport)
+    }
+
+    pub(crate) fn transport_deadline(message: &str) -> Self {
+        Self::new(
+            ErrorCode::DeadlineExceeded,
+            PeerObservation::NotObserved,
+            message,
+        )
+        .with_origin(ErrorOrigin::Transport)
+    }
+
+    pub(crate) fn from_gateway(
+        code: WireErrorCode,
+        observation: PeerObservation,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(ErrorCode::from_wire(code), observation, message)
+            .with_origin(ErrorOrigin::Gateway)
+    }
+
+    pub(crate) fn from_gateway_operation(
+        action: &'static str,
+        code: WireErrorCode,
+        observation: PeerObservation,
+        message: String,
+    ) -> Self {
+        let message = match code {
+            WireErrorCode::Unauthenticated => {
+                format!(
+                    "{action} authentication failed; check the operation JWT and Gateway authentication configuration"
+                )
+            }
+            WireErrorCode::PermissionDenied => {
+                format!(
+                    "{action} authorization was denied; check action and Destination grants or Gateway dependency permissions"
+                )
+            }
+            _ => message,
+        };
+        Self::from_gateway(code, observation, message)
     }
 
     /// Returns the stable SDK failure category.
@@ -116,7 +196,15 @@ impl Error {
         self.observation
     }
 
-    /// Returns an unstructured diagnostic; branch on [`Self::code`] instead.
+    /// Returns the boundary at which the SDK observed this error. This is independent of
+    /// whether the peer observed the operation.
+    #[must_use]
+    pub const fn origin(&self) -> ErrorOrigin {
+        self.origin
+    }
+
+    /// Returns an unstructured diagnostic; branch on [`Self::code`] and
+    /// [`Self::origin`] instead.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -166,12 +254,26 @@ impl Error {
         )
     }
 
+    pub(crate) fn transport_unavailable(message: impl Into<String>) -> Self {
+        Self::unavailable(message).with_origin(ErrorOrigin::Transport)
+    }
+
+    pub(crate) fn token_source_deadline() -> Self {
+        Self::new(
+            ErrorCode::DeadlineExceeded,
+            PeerObservation::NotObserved,
+            "application token source exceeded the operation deadline",
+        )
+        .with_origin(ErrorOrigin::TokenSource)
+    }
+
     pub(crate) fn maybe_observed(message: impl Into<String>) -> Self {
         Self::new(
             ErrorCode::Unavailable,
             PeerObservation::MaybeObserved,
             message,
         )
+        .with_origin(ErrorOrigin::Transport)
     }
 
     pub(crate) fn deadline(observation: PeerObservation) -> Self {
@@ -195,7 +297,7 @@ impl PeerObservation {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, ErrorCode, PeerObservation};
+    use super::{Error, ErrorCode, ErrorOrigin, PeerObservation};
 
     #[test]
     fn retryable_requires_a_transient_not_observed_failure() {
@@ -218,5 +320,47 @@ mod tests {
                 "{code:?} must not produce a retry hint"
             );
         }
+    }
+
+    #[test]
+    fn gateway_authorization_errors_have_stable_actionable_diagnostics() {
+        let unauthenticated = Error::from_gateway_operation(
+            "PUBLISH",
+            relaygate_protocol::ErrorCode::Unauthenticated,
+            PeerObservation::NotObserved,
+            "untrusted remote text: raw-token".to_owned(),
+        );
+        assert_eq!(unauthenticated.code(), ErrorCode::Unauthenticated);
+        assert_eq!(unauthenticated.origin(), ErrorOrigin::Gateway);
+        assert!(unauthenticated.message().contains("PUBLISH authentication"));
+        assert!(!unauthenticated.message().contains("raw-token"));
+
+        let denied = Error::from_gateway_operation(
+            "DIAL",
+            relaygate_protocol::ErrorCode::PermissionDenied,
+            PeerObservation::NotObserved,
+            "untrusted remote text: raw-token".to_owned(),
+        );
+        assert_eq!(denied.code(), ErrorCode::PermissionDenied);
+        assert_eq!(denied.origin(), ErrorOrigin::Gateway);
+        assert!(denied.message().contains("DIAL authorization"));
+        assert!(!denied.message().contains("raw-token"));
+    }
+    #[test]
+    fn protocol_io_failure_remains_transport_unavailable() {
+        let io = Error::from_protocol(
+            relaygate_protocol::ProtocolError::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset,
+            )),
+            "frame read",
+        );
+        assert_eq!(io.code(), ErrorCode::Unavailable);
+        assert_eq!(io.origin(), ErrorOrigin::Transport);
+        let malformed = Error::from_protocol(
+            relaygate_protocol::ProtocolError::InvalidMagic,
+            "frame read",
+        );
+        assert_eq!(malformed.code(), ErrorCode::ProtocolError);
+        assert_eq!(malformed.origin(), ErrorOrigin::Transport);
     }
 }
