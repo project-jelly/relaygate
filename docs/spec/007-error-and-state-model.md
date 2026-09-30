@@ -41,6 +41,7 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 | 경로 | code / origin / observation |
 | --- | --- |
+| initial connect 전체 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED`; 계측은 `error/deadline_exceeded` |
 | initial `SESSION_REJECTED` | Gateway 응답 code / `Gateway` / `NOT_OBSERVED` |
 | token source 일시 실패 | `UNAVAILABLE` / `TokenSource` / `NOT_OBSERVED` |
 | token source 재인증 요구 | `UNAUTHENTICATED` / `TokenSource` / `NOT_OBSERVED` |
