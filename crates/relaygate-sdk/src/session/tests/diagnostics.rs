@@ -32,11 +32,13 @@ async fn initial_admission_rejection_has_no_committed_operation() -> TestResult 
                 .await?;
             Ok::<_, Box<dyn StdError + Send + Sync>>(())
         });
-        let error = match Relay::connect(Config::new_insecure_for_tests(address.to_string())).await
-        {
-            Err(error) => error,
-            Ok(_) => return Err("rejected connection succeeded".into()),
-        };
+        let error =
+            match crate::session::establish(&Config::new_insecure_for_tests(address.to_string()))
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => return Err("rejected connection succeeded".into()),
+            };
         assert_eq!(error.origin(), ErrorOrigin::Gateway);
         assert_eq!(error.observation(), PeerObservation::NotObserved);
         assert_eq!(error.is_retryable(), retryable);
@@ -235,5 +237,213 @@ async fn session_writer_preserves_timeout_and_io_failure() -> TestResult {
     .ok_or("write should fail")?;
     assert_eq!(error.code(), ErrorCode::Unavailable);
     assert_eq!(error.origin(), ErrorOrigin::Transport);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initial_connect_recovers_from_transient_admission_rejection() -> TestResult {
+    let socket = TcpListener::bind("127.0.0.1:0").await?;
+    let address = socket.local_addr()?;
+    let server = tokio::spawn(async move {
+        for code in [
+            relaygate_protocol::ErrorCode::Unavailable,
+            relaygate_protocol::ErrorCode::ResourceExhausted,
+        ] {
+            let (stream, _) = socket.accept().await?;
+            let mut framed = Framed::new(stream, FrameCodec::new(DEFAULT_MAX_FRAME_LEN));
+            assert!(matches!(framed.next().await, Some(Ok(Frame::Hello))));
+            framed
+                .send(Frame::SessionRejected {
+                    code,
+                    message: "draining".into(),
+                })
+                .await?;
+        }
+        let (mut framed, _) = welcome(&socket).await?;
+        assert!(framed.next().await.is_none());
+        Ok::<_, Box<dyn StdError + Send + Sync>>(())
+    });
+    let relay = timeout(
+        Duration::from_secs(2),
+        Relay::connect(
+            Config::new_insecure_for_tests(address.to_string())
+                .with_connect_timeout(Duration::from_secs(1))
+                .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(10)),
+        ),
+    )
+    .await??;
+    assert_eq!(relay.status(), RelayStatus::Active);
+    assert!(relay.last_error().is_none());
+    relay.close();
+    timeout(Duration::from_secs(1), server).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn token_supply_recovers_before_first_publish_and_dial() -> TestResult {
+    let socket = TcpListener::bind("127.0.0.1:0").await?;
+    let address = socket.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut framed, _) = welcome(&socket).await?;
+        let request_id = match framed.next().await.ok_or("missing PUBLISH")?? {
+            Frame::Publish { request_id, .. } => request_id,
+            _ => return Err("expected PUBLISH".into()),
+        };
+        framed
+            .send(Frame::Published {
+                request_id,
+                binding_id: BindingId::new(),
+            })
+            .await?;
+        let connection_id = match framed.next().await.ok_or("missing DIAL")?? {
+            Frame::Dial { connection_id, .. } => connection_id,
+            _ => return Err("expected DIAL".into()),
+        };
+        // The token supplier may retry; an issued wire DIAL still has one result.
+        framed
+            .send(Frame::DialFailed {
+                connection_id,
+                code: relaygate_protocol::ErrorCode::Unavailable,
+                observation: relaygate_protocol::PeerObservation::NotObserved,
+                message: "selected target unavailable".into(),
+            })
+            .await?;
+        assert!(
+            framed.next().await.is_none(),
+            "DIAL was replayed after its result"
+        );
+        Ok::<_, Box<dyn StdError + Send + Sync>>(())
+    });
+    let relay = Relay::connect(
+        Config::new_insecure_for_tests(address.to_string())
+            .with_operation_timeout(Duration::from_secs(2))
+            .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(10)),
+    )
+    .await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&attempts);
+    let source = AccessTokenSource::dynamic(move |_| {
+        let call = observed.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if call % 3 != 2 {
+                Err(AccessTokenSourceError)
+            } else {
+                AccessToken::new("grant").map_err(|_| AccessTokenSourceError)
+            }
+        }
+    });
+    let listener = relay.listen("test/retry".parse()?, source.clone()).await?;
+    assert_eq!(listener.status(), ListenerStatus::Active);
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    let error = relay
+        .dial("test/retry".parse()?, source)
+        .await
+        .err()
+        .ok_or("unexpected Pipe")?;
+    assert_eq!(error.code(), ErrorCode::Unavailable);
+    assert_eq!(error.origin(), ErrorOrigin::Gateway);
+    assert_eq!(attempts.load(Ordering::SeqCst), 6);
+    relay.close();
+    timeout(Duration::from_secs(1), server).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn relay_close_cancels_pending_dial_token_supply() -> TestResult {
+    let socket = TcpListener::bind("127.0.0.1:0").await?;
+    let address = socket.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut framed, _) = welcome(&socket).await?;
+        assert!(
+            framed.next().await.is_none(),
+            "DIAL committed without a token"
+        );
+        Ok::<_, Box<dyn StdError + Send + Sync>>(())
+    });
+    let relay = Relay::connect(
+        Config::new_insecure_for_tests(address.to_string())
+            .with_operation_timeout(Duration::from_secs(30)),
+    )
+    .await?;
+    let (supplied, mut supply_started) = tokio::sync::mpsc::unbounded_channel();
+    let source = AccessTokenSource::dynamic(move |_| {
+        let _ = supplied.send(());
+        std::future::pending::<Result<AccessToken, AccessTokenSourceError>>()
+    });
+    let dial_relay = relay.clone();
+    let dial = tokio::spawn(async move {
+        dial_relay
+            .dial("test/cancel".parse()?, source)
+            .await
+            .map_err(Into::into)
+    });
+    timeout(Duration::from_secs(1), supply_started.recv())
+        .await?
+        .ok_or("source not called")?;
+    relay.close();
+    let result: TestResult<crate::Pipe> = timeout(Duration::from_secs(1), dial).await??;
+    let error = result.err().ok_or("unexpected Pipe")?;
+    assert_eq!(
+        error.downcast_ref::<crate::Error>().map(crate::Error::code),
+        Some(ErrorCode::Cancelled)
+    );
+    timeout(Duration::from_secs(1), server).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_initial_listen_drops_token_supply() -> TestResult {
+    struct SupplyGuard(tokio::sync::mpsc::UnboundedSender<()>);
+    impl Drop for SupplyGuard {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    let socket = TcpListener::bind("127.0.0.1:0").await?;
+    let address = socket.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut framed, _) = welcome(&socket).await?;
+        assert!(
+            framed.next().await.is_none(),
+            "PUBLISH committed without a token"
+        );
+        Ok::<_, Box<dyn StdError + Send + Sync>>(())
+    });
+    let relay = Relay::connect(
+        Config::new_insecure_for_tests(address.to_string())
+            .with_operation_timeout(Duration::from_secs(30)),
+    )
+    .await?;
+    let (started, mut supply_started) = tokio::sync::mpsc::unbounded_channel();
+    let (dropped, mut supply_dropped) = tokio::sync::mpsc::unbounded_channel();
+    let source = AccessTokenSource::dynamic(move |_| {
+        let started = started.clone();
+        let dropped = dropped.clone();
+        async move {
+            let _guard = SupplyGuard(dropped);
+            let _ = started.send(());
+            std::future::pending::<Result<AccessToken, AccessTokenSourceError>>().await
+        }
+    });
+    let listen_relay = relay.clone();
+    let listen = tokio::spawn(async move {
+        let destination: Destination = "test/cancel".parse()?;
+        listen_relay
+            .listen(destination, source)
+            .await
+            .map_err(Into::into)
+    });
+    timeout(Duration::from_secs(1), supply_started.recv())
+        .await?
+        .ok_or("source not called")?;
+    listen.abort();
+    let result: Result<TestResult<crate::Listener>, _> = listen.await;
+    assert!(result.is_err_and(|error| error.is_cancelled()));
+    timeout(Duration::from_secs(1), supply_dropped.recv())
+        .await?
+        .ok_or("source did not stop")?;
+    assert_eq!(relay.status(), RelayStatus::Active);
+    relay.close();
+    timeout(Duration::from_secs(1), server).await???;
     Ok(())
 }

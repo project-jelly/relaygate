@@ -11,8 +11,8 @@ failure입니다.
 | code | 대표 조건 | 새 operation 조건 |
 | --- | --- | --- |
 | `INVALID_ARGUMENT` | Destination/config/frame 오류 | 입력 변경 |
-| `UNAUTHENTICATED` | access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 | 새 유효 token/config |
-| `PERMISSION_DENIED` | 유효한 token에 요청 action·exact Destination 권한 없음 | 권한이 맞는 새 token |
+| `UNAUTHENTICATED` | access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 또는 token source 재인증 요구 | 새 유효 token/config 또는 application 인증 복구 |
+| `PERMISSION_DENIED` | 유효한 token에 요청 action·exact Destination 권한 없음 또는 token source 권한 거절 | grant 또는 application 권한 복구 |
 | `NOT_FOUND` | current Binding 없음 | 상태 변경 |
 | `FAILED_PRECONDITION` | self Binding만 존재, closed object | 전제 변경 |
 | `UNAVAILABLE` | drain, dependency/transport/token source loss | backoff |
@@ -31,7 +31,7 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 | origin | 조건 | application 대응 |
 | --- | --- | --- |
 | `Sdk` | 로컬 입력·상태·자원 처리 | code에 따라 입력·부하·lifecycle 확인 |
-| `TokenSource` | application token 공급 실패·deadline | token backend 복구; 영구적 정책 변경이면 Listener 종료 |
+| `TokenSource` | application token 공급 실패·deadline | 일시 장애는 backoff; 인증·권한 실패는 application 조치 후 새 operation/Listener |
 | `Transport` | TCP·TLS·HELLO/WELCOME·session loss | endpoint·TLS 설정 또는 Gateway 연결 확인 |
 | `Gateway` | Gateway 실패 응답 | `UNAUTHENTICATED`는 JWT profile·key·claims·expiry, `PERMISSION_DENIED`는 grant 확인 |
 
@@ -42,6 +42,9 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 | 경로 | code / origin / observation |
 | --- | --- |
 | initial `SESSION_REJECTED` | Gateway 응답 code / `Gateway` / `NOT_OBSERVED` |
+| token source 일시 실패 | `UNAVAILABLE` / `TokenSource` / `NOT_OBSERVED` |
+| token source 재인증 요구 | `UNAUTHENTICATED` / `TokenSource` / `NOT_OBSERVED` |
+| token source 권한 거절 | `PERMISSION_DENIED` / `TokenSource` / `NOT_OBSERVED` |
 | `PUBLISH/DIAL` token source deadline | `DEADLINE_EXCEEDED` / `TokenSource` / `NOT_OBSERVED` |
 | session 대기 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED` |
 | committed `PUBLISH/DIAL` 응답 deadline | `DEADLINE_EXCEEDED` / `Transport` / `MAYBE_OBSERVED` |
@@ -52,6 +55,12 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 `PUBLISHED` 처리 중에도 `ACTIVE` 전이와 commit 표시 제거는 같은 상태 lock에서 수행합니다.
 그 전에 initial deadline이 먼저 종료하면 `MAYBE_OBSERVED`를 유지합니다.
+
+초기 connect와 initial listen/dial의 token 공급은 `NOT_OBSERVED` 일시 오류를 기존 deadline 안에서 자동 재시도합니다.
+전체 deadline은 시도마다 갱신하지 않으며, 시간 소진은 해당 origin의 `DEADLINE_EXCEEDED`입니다.
+Gateway의 initial PUBLISH/DIAL 실패 응답은 기존대로 caller에 반환합니다.
+`dynamic_with_errors`의 인증·권한 실패는 재시도하지 않습니다. 기존 `dynamic`의 실패는 일시 실패로 유지합니다.
+TokenSource 메시지는 action과 조치 안내만 포함하며 backend 응답·credential을 복사하지 않습니다.
 
 Session 종료 원인은 Relay `RECONNECTING` 통지 전 기록하고 영향을 받는 작업에도 전달합니다. 자동 reconnect와
 Listener republish 여부는 lifecycle이 결정하며, `Error::is_retryable()`은 caller의 새 control operation을 위한
@@ -76,8 +85,9 @@ stateDiagram-v2
         REGISTERING --> ACTIVE: Binding confirmed
         REGISTERING --> CLOSED: Relay::listen Err / close
         REGISTERING --> SUSPENDED: returned Listener transient failure/session loss
-        REGISTERING --> BLOCKED: returned Listener permanent PUBLISH failure
+        REGISTERING --> BLOCKED: returned Listener permanent registration failure
         ACTIVE --> SUSPENDED: session loss
+        SUSPENDED --> BLOCKED: token source authentication/permission failure
         SUSPENDED --> REGISTERING: bounded republish retry
         ACTIVE --> CLOSED: close
         SUSPENDED --> CLOSED: close
@@ -94,7 +104,7 @@ Session reconnect는 Listener identity와 AccessTokenSource를 유지하고 새 
 초기 config·transport·handshake 실패는 `Relay::connect`의 `Err`입니다. 실행 중 session·protocol·transport
 failure는 current session을 끝내고 bounded backoff 재연결을 계속합니다. 늦은 old-session
 `PUBLISHED/OFFER`는 current state를 유지하며 `REMOVED` Binding은 terminal입니다. Gateway의 initial
-PUBLISH 실패 응답은 `Relay::listen`의 `Err`이고, 이미 반환된 Listener의 영구적인 PUBLISH 실패는 Listener만
+PUBLISH 실패 응답은 `Relay::listen`의 `Err`이고, 이미 반환된 Listener의 token source 인증·권한 실패와 영구적인 PUBLISH 실패는 Listener만
 `BLOCKED`로 만듭니다.
 Public status subscription은 SDK 소유 wrapper로 latest-state/coalescing 의미를 가집니다. `current()`는
 현재 값을 반환하고 subscription cursor를 소비하며, `changed()`는 그 이후 변경에서 latest state를 반환합니다.
@@ -188,7 +198,8 @@ session 상한은 `RESOURCE_EXHAUSTED`)은 handshake 예산 안에서 `SESSION_R
 | --- | --- | --- | --- |
 | SDK–GW loss | session 소유 Pipe/dial/Binding | 다른 session·Binding | reconnect + Listener republish |
 | drain 중 HELLO | 해당 socket(`SESSION_REJECTED/UNAVAILABLE`) | 기존 session·Binding·Pipe | SDK backoff 재연결 |
-| token source 실패 | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | application source 회복; returned Listener는 재공급 시도 |
+| token source 일시 실패·deadline | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | backoff; initial은 원래 deadline, returned Listener는 재공급 시도 |
+| token source 인증·권한 실패 | initial은 즉시 Err; returned Listener는 `BLOCKED` | session·sibling Binding·Pipe | 인증·권한 복구 후 새 operation; blocked Listener close 후 재생성 |
 | token 인증·권한 실패 | 해당 PUBLISH/DIAL; returned Listener는 `BLOCKED` | session·기존 sibling Binding·Pipe | application이 새 token/source로 새 operation 구성 |
 | authorization capacity/deadline | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | 부하 감소 뒤 새 operation |
 | OFFER uncertain | selected RelaySession | sibling session·Binding | reconnect; caller 새 dial |

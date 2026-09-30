@@ -9,12 +9,13 @@ mod listener;
 mod observability;
 mod pipe;
 mod resource;
+mod retry;
 mod session;
 mod transport;
 
 pub use access_token::{
     AccessAction, AccessToken, AccessTokenError, AccessTokenRequest, AccessTokenSource,
-    AccessTokenSourceError,
+    AccessTokenSourceError, AccessTokenSourceFailure,
 };
 pub use config::{Config, ResourceLimits};
 pub use error::{Error, ErrorCode, ErrorOrigin, PeerObservation, Result};

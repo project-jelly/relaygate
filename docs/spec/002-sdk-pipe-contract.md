@@ -62,33 +62,37 @@ async callback(action, Destination) -> PUBLISH 또는 DIAL
 | `SDK-003` | 실행 중 session loss는 bounded exponential backoff와 runtime별 jitter로 재연결한다. |
 | `SDK-004` | 새 session은 이미 반환된 live Listener를 새 AccessToken으로 자동 republish한다. |
 | `SDK-005` | recovery는 새 session·Binding을 만든다. existing Pipe, committed dial, payload와 PUBLISH가 commit된 initial listen은 terminal이다. PUBLISH pre-commit initial listen은 원래 deadline 안에서 재시도한다. |
-| `SDK-006` | 초기 config·transport·handshake 실패는 `Relay::connect`의 `Err`다. Gateway의 `SESSION_REJECTED`(drain 중 `UNAVAILABLE`)도 같은 `Err`다. 실행 중 session·protocol·transport failure는 current session을 끝내고 bounded backoff 재연결로 수렴한다. |
+| `SDK-006` | 초기 config 오류와 Gateway 인증·권한 거절 또는 protocol 오류는 `Relay::connect`의 `Err`다. 초기 연결의 `NOT_OBSERVED` 일시 실패와 drain 중 `SESSION_REJECTED(UNAVAILABLE)`는 전체 `connect_timeout` 안에서 재시도하고, 예산 소진은 `DEADLINE_EXCEEDED`다. 실행 중 session·protocol·transport failure는 current session을 끝내고 bounded backoff 재연결로 수렴한다. |
 | `SDK-007` | explicit close는 같은 runtime의 terminal `CLOSED`로 수렴한다. |
 | `SDK-014` | AccessToken은 비어 있지 않은 최대 4,096 bytes이고 Debug 출력은 값을 redaction한다. |
 | `SDK-015` | dynamic AccessTokenSource는 `AccessAction`과 exact Destination을 받아 application-owned future를 실행한다. |
 | `SDK-016` | Listener는 AccessTokenSource를 보관하고 initial publish와 republish마다 다시 호출한다. |
-| `SDK-017` | dial은 API 호출당 AccessTokenSource를 정확히 한 번 resolve하며 committed operation을 SDK가 replay하지 않는다. |
+| `SDK-017` | dial은 API 호출당 AccessTokenSource의 첫 성공 결과를 재사용한다. 일시 공급 실패는 원래 operation deadline 안에서 재호출하며 committed operation을 SDK가 replay하지 않는다. |
 | `SDK-018` | SDK runtime은 token cache, singleflight, refresh token, private key와 token issuer를 소유하지 않는다. Backend가 필요하면 `relaygate-token-issuer`로 AccessToken을 생성해 `AccessTokenSource`에 공급한다. |
-| `SDK-019` | returned Listener의 republish token source 실패는 Relay당 하나의 bounded exponential backoff+jitter timer로 병합한다. timer가 준비되기 전 다른 reconcile trigger는 suspended Listener를 재시도하지 않는다. 전체 Listener가 다시 active이면 backoff를 초기화하고 대기 중 timer를 무효화한다. |
+| `SDK-019` | returned Listener의 republish token source 일시 실패는 Relay당 하나의 bounded exponential backoff+jitter timer로 병합한다. timer가 준비되기 전 다른 reconcile trigger는 suspended Listener를 재시도하지 않는다. 전체 Listener가 다시 active이면 backoff를 초기화하고 대기 중 timer를 무효화한다. |
 | `SDK-020` | Relay live Pipe 상한은 outgoing DIAL의 pending 단계부터 returned Pipe 수명까지와 incoming Pipe를 함께 계산하고 모든 실패·cancel·drop·terminal 경로에서 점유를 반환한다. |
 | `SDK-022` | Relay와 Listener status subscription은 SDK 소유 wrapper이며 raw watch channel을 노출하지 않는다. `current()`는 latest snapshot을 반환하고 subscription cursor를 소비하며, `changed()`는 그 이후 coalescing된 latest state를 반환한다. Relay `ACTIVE`는 current `HELLO/WELCOME` transport session 설치를 뜻하며 Listener republish/`BLOCKED`와 분리된다. Relay `CLOSED`는 terminal이고 `ACTIVE`로 역행하지 않는다. |
 | `SDK-023` | Relay `last_error()`는 session 종료 원인을 `RECONNECTING` 통지 전에 기록하고 이후 실패한 reconnect 시도로 교체한다. Listener는 현재 등록 실패를 조회한다. Relay는 새 session의 `ACTIVE`와 close에서, Listener는 새 PUBLISH commit·등록 `ACTIVE`·close에서 해당 오류를 제거한다. Status subscription은 latest-state 조회이며 시도별 오류 이력이 아니다. |
-| `SDK-024` | `Error::origin()`은 SDK가 관측한 `Sdk/TokenSource/Transport/Gateway` 경계다. TokenSource 실패는 `UNAVAILABLE`, 공급 deadline은 `DEADLINE_EXCEEDED`다. Initial listen의 외부 deadline과 token future deadline은 같은 진행 단계·origin·observation으로 종료한다. Session 대기 deadline은 `Transport`다. Wire code 종류는 유지한다. |
+| `SDK-024` | `Error::origin()`은 SDK가 관측한 `Sdk/TokenSource/Transport/Gateway` 경계다. TokenSource 일시 실패는 `UNAVAILABLE`, 공급 deadline은 `DEADLINE_EXCEEDED`, 공급자가 지정한 인증·권한 실패는 `UNAUTHENTICATED`·`PERMISSION_DENIED`다. Initial listen의 외부 deadline과 token future deadline은 같은 진행 단계·origin·observation으로 종료한다. Session 대기 deadline은 `Transport`다. Wire code 종류는 유지한다. |
 | `SDK-025` | `SESSION_REJECTED`는 session 미수립인 `NOT_OBSERVED` 오류다. `UNAVAILABLE/RESOURCE_EXHAUSTED`는 backoff 뒤 새 연결을 허용한다. Committed DIAL의 불확실한 실패와 Pipe payload는 자동 재실행하지 않는다. |
 | `SDK-026` | Session 종료 원인의 code·origin·message는 Relay와 영향을 받는 Listener·Pipe·DIAL까지 보존한다. Observation은 각 operation의 commit 상태로 결정하며 Pipe I/O에서는 payload receipt가 아니다. |
+| `SDK-027` | 최초 연결과 initial PUBLISH/DIAL token 공급은 공통 precommit retry 처리로 기존 전체 deadline·backoff+jitter·cancel을 따른다. Returned Listener 재등록은 기존 Relay 공용 타이머를 사용한다. Gateway PUBLISH/DIAL 응답·불확실한 operation·Pipe payload는 이 retry 처리에 넣지 않는다. |
+| `SDK-028` | `dynamic_with_errors`의 `AccessTokenSourceFailure`는 `Unavailable`·`Unauthenticated`·`PermissionDenied`를 같은 SDK code와 `TokenSource/NOT_OBSERVED`로 전달한다. 일시 실패만 재시도한다. 인증·권한 실패는 initial listen/dial에서 즉시 반환하고 returned Listener는 `BLOCKED`로 전환한다. sibling Listener와 Relay는 유지하며 reconnect episode는 `degraded`로 기록한다. 기존 `dynamic`·`AccessTokenSourceError`는 일시 실패 의미를 유지한다. |
 
 | 상황 | 결과 |
 | --- | --- |
-| token source 실패·deadline | 해당 operation만 `UNAVAILABLE` 또는 `DEADLINE_EXCEEDED/NOT_OBSERVED` |
+| initial token source 일시 실패·deadline | 일시 실패는 원래 deadline 안에서 backoff 재시도; 소진은 `DEADLINE_EXCEEDED/NOT_OBSERVED` |
+| initial token source 인증·권한 실패 | 재시도 없이 해당 code 반환; wire operation 없음 |
+| returned Listener의 token source 인증·권한 실패 | `BLOCKED`; 새 source로 Listener 재생성 |
 | initial PUBLISH pre-commit session 종료 | 원래 deadline 안에서 재시도 |
 | initial PUBLISH post-commit session 종료 | `MAYBE_OBSERVED` 오류 |
 | Gateway의 initial PUBLISH 실패 응답 | `Relay::listen`의 `Err` |
-| returned Listener의 republish token source 실패 | `SUSPENDED`; bounded delay 뒤 재공급 요청 |
+| returned Listener의 republish token source 일시 실패 | `SUSPENDED`; bounded delay 뒤 재공급 요청 |
 | returned Listener의 영구적 PUBLISH 실패 | `BLOCKED`; `INVALID_ARGUMENT`, `UNAUTHENTICATED`, `PERMISSION_DENIED`, `FAILED_PRECONDITION`, `ALREADY_EXISTS` |
 | reconnect episode 종료 | 모든 returned Listener가 `ACTIVE` 또는 `BLOCKED`로 settled |
 | episode 중 `BLOCKED` 발생 | Relay session이 `ACTIVE`이거나 Listener가 즉시 drop되어도 outcome은 `degraded` |
 
-`BLOCKED` 복구는 application이 새 token source 또는 Relay/Listener를 구성합니다.
+`BLOCKED` 복구는 application이 인증·권한을 복구하고 해당 Listener를 close한 뒤 새 source로 다시 listen합니다.
 
 ## Relay runtime
 
