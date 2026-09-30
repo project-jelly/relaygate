@@ -66,7 +66,7 @@ async fn establish_inner(config: &Config) -> Result<EstablishedSession> {
     transport
         .send(Frame::Hello)
         .await
-        .map_err(|error| Error::transport_unavailable(format!("session HELLO failed: {error}")))?;
+        .map_err(|error| Error::from_protocol(error, "session HELLO failed"))?;
     let frame = transport
         .next()
         .await

@@ -39,7 +39,7 @@ macro_rules! error_codes {
 error_codes! {
     /// An input or configuration value was invalid.
     InvalidArgument => "invalid_argument",
-    /// Application token supply or the operation credential could not authenticate the caller.
+    /// TLS certificate validation, application token supply, or operation authentication failed.
     Unauthenticated => "unauthenticated",
     /// Application token supply or operation permission was denied.
     PermissionDenied => "permission_denied",
@@ -55,7 +55,7 @@ error_codes! {
     ResourceExhausted => "resource_exhausted",
     /// The operation or owning runtime was cancelled.
     Cancelled => "cancelled",
-    /// A peer violated the RelayGate wire contract.
+    /// A peer violated the TLS or RelayGate wire contract.
     ProtocolError => "protocol_error",
     /// RelayGate encountered an internal failure.
     Internal => "internal",
@@ -131,14 +131,34 @@ impl Error {
     }
 
     pub(crate) fn from_protocol(error: relaygate_protocol::ProtocolError, context: &str) -> Self {
-        let code = match &error {
-            relaygate_protocol::ProtocolError::Io(_) => ErrorCode::Unavailable,
-            _ => ErrorCode::ProtocolError,
+        match error {
+            relaygate_protocol::ProtocolError::Io(error) => Self::from_transport_io(error, context),
+            error => Self::new(
+                ErrorCode::ProtocolError,
+                PeerObservation::NotObserved,
+                format!("{context}: {error}"),
+            )
+            .with_origin(ErrorOrigin::Transport),
+        }
+    }
+
+    pub(crate) fn from_transport_io(error: std::io::Error, context: &str) -> Self {
+        use relaygate_transport::TlsErrorKind;
+        let (code, guidance) = match TlsErrorKind::from_io(&error) {
+            Some(TlsErrorKind::Authentication) => (
+                ErrorCode::Unauthenticated,
+                "; check TLS certificate trust, validity, server name and client identity",
+            ),
+            Some(TlsErrorKind::Protocol) => (
+                ErrorCode::ProtocolError,
+                "; check TLS endpoint, protocol compatibility and relaygate/3 ALPN",
+            ),
+            _ => (ErrorCode::Unavailable, ""),
         };
         Self::new(
             code,
             PeerObservation::NotObserved,
-            format!("{context}: {error}"),
+            format!("{context}: {error}{guidance}"),
         )
         .with_origin(ErrorOrigin::Transport)
     }

@@ -1,7 +1,7 @@
 use std::{io, sync::Arc, time::Duration};
 
 use rcgen::{CertifiedKey, generate_simple_self_signed};
-use relaygate_transport::{ClientTlsConfig, ServerTlsConfig, TlsConfigError};
+use relaygate_transport::{ClientTlsConfig, ServerTlsConfig, TlsConfigError, TlsErrorKind};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use tokio::{
@@ -258,6 +258,7 @@ async fn tls_client_rejects_a_server_without_alpn() -> Result<(), Box<dyn std::e
         Err(error) => error,
     };
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(TlsErrorKind::from_io(&error), Some(TlsErrorKind::Protocol));
     accepted.await??;
     Ok(())
 }

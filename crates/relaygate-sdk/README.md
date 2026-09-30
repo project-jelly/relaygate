@@ -18,6 +18,19 @@ with a private CA via `Config::with_ca_certificate`. `tcp://host:port`
 explicitly selects plaintext; it does not encrypt access tokens or Pipe data,
 and a TLS failure never falls back to plaintext.
 
+Branch on `Error::code()` and `Error::origin()`, not message text:
+
+| TLS failure (`ErrorOrigin::Transport`) | Code | Initial connect |
+| --- | --- | --- |
+| Certificate trust, name, validity, or peer certificate rejection | `Unauthenticated` | Return immediately |
+| TLS protocol or `relaygate/3` ALPN mismatch | `ProtocolError` | Return immediately |
+| Network I/O or unclassified TLS failure | `Unavailable` | Retry within connect timeout |
+
+An existing Relay keeps reconnecting with backoff and exposes the latest failure
+through `last_error()`. A repaired server certificate can restore the session and
+Listeners under the existing trust. Changing SDK trust or client identity requires
+a new Config and Relay; certificate files are not automatically reloaded.
+
 Every `listen` and `dial` supplies an application-issued operation token.
 RelayGate does not issue, refresh, or persist these credentials. Production
 applications should use `AccessTokenSource::dynamic_with_errors` to fetch short-lived token

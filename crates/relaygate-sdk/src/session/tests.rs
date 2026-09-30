@@ -1,4 +1,5 @@
 mod diagnostics;
+mod tls_errors;
 mod token_source;
 
 use std::{
