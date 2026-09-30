@@ -80,7 +80,14 @@ pub(super) async fn handle_relay_frame(
                 frame = ?other,
                 "unexpected frame ended the Relay session"
             );
-            RelayFrameAction::Stop
+            RelayFrameAction::Stop(
+                Error::new(
+                    ErrorCode::ProtocolError,
+                    PeerObservation::NotObserved,
+                    "unexpected Gateway frame in active RelaySession",
+                )
+                .with_origin(crate::ErrorOrigin::Transport),
+            )
         }
     }
 }
@@ -101,7 +108,7 @@ impl FrameContext<'_, '_> {
     /// own: stop once the runtime is cancelled, otherwise continue.
     fn settle(&self) -> RelayFrameAction {
         if self.inner.cancel.is_cancelled() {
-            RelayFrameAction::Stop
+            RelayFrameAction::Stop(Error::closed())
         } else {
             RelayFrameAction::Continue
         }
@@ -114,7 +121,8 @@ impl FrameContext<'_, '_> {
         self.session
             .pending_by_destination
             .remove(&pending.state.destination);
-        pending.state.finish_registration_attempt();
+        // Keep commit visible until activate updates status under the state lock.
+        // A concurrent initial deadline must not turn this PUBLISH into NotObserved.
         if is_current_desired(self.inner, &pending.state) && pending.state.activate() {
             tracing::debug!(
                 component = "sdk",
@@ -135,18 +143,21 @@ impl FrameContext<'_, '_> {
             return RelayFrameAction::RegistrationSucceeded;
         }
         let Some(request_id) = self.session.next_request_id() else {
-            return RelayFrameAction::Stop;
+            return RelayFrameAction::Stop(Error::new(
+                ErrorCode::ResourceExhausted,
+                PeerObservation::NotObserved,
+                "RelaySession exhausted request IDs",
+            ));
         };
-        if self
+        if let Err(error) = self
             .link
             .send(Frame::Unpublish {
                 request_id,
                 binding_id,
             })
             .await
-            .is_err()
         {
-            return RelayFrameAction::Stop;
+            return RelayFrameAction::Stop(error);
         }
         RelayFrameAction::Reconcile
     }
@@ -169,11 +180,8 @@ impl FrameContext<'_, '_> {
         {
             return RelayFrameAction::Reconcile;
         }
-        let error = Error::new(
-            ErrorCode::from_wire(code),
-            PeerObservation::NotObserved,
-            message,
-        );
+        let error =
+            Error::from_gateway_operation("PUBLISH", code, PeerObservation::NotObserved, message);
         if permanent_registration_failure(code) {
             if pending.state.was_returned() {
                 pending.state.block(error);
@@ -194,7 +202,7 @@ impl FrameContext<'_, '_> {
             return RelayFrameAction::Reconcile;
         }
         if self.inner.cancel.is_cancelled() {
-            RelayFrameAction::Stop
+            RelayFrameAction::Stop(Error::closed())
         } else {
             RelayFrameAction::SettlementChanged
         }
@@ -208,13 +216,9 @@ impl FrameContext<'_, '_> {
     ) -> RelayFrameAction {
         if let Some(existing) = self.session.pipes.get(&pipe_id) {
             if !existing.state.is_finished()
-                && self
-                    .link
-                    .send(Frame::OfferAccepted { pipe_id })
-                    .await
-                    .is_err()
+                && let Err(error) = self.link.send(Frame::OfferAccepted { pipe_id }).await
             {
-                return RelayFrameAction::Stop;
+                return RelayFrameAction::Stop(error);
             }
             return RelayFrameAction::Continue;
         }
@@ -254,7 +258,11 @@ impl FrameContext<'_, '_> {
                 destination = %destination,
                 "Listener incoming queue compaction could not preserve live Pipes"
             );
-            return RelayFrameAction::Stop;
+            return RelayFrameAction::Stop(Error::new(
+                ErrorCode::Internal,
+                PeerObservation::NotObserved,
+                "Listener queue or runtime invariant failed",
+            ));
         }
         let permit = match registration.state.incoming_tx.try_reserve() {
             Ok(permit) => permit,
@@ -303,7 +311,7 @@ impl FrameContext<'_, '_> {
                         "Listener desired registry lock is poisoned during Pipe admission"
                     );
                     self.inner.cancel.cancel();
-                    return RelayFrameAction::Stop;
+                    return RelayFrameAction::Stop(Error::closed());
                 }
             };
             if !desired
@@ -315,7 +323,7 @@ impl FrameContext<'_, '_> {
             } else {
                 let Some(lifetime) = self.inner.lifetime.upgrade() else {
                     self.inner.cancel.cancel();
-                    return RelayFrameAction::Stop;
+                    return RelayFrameAction::Stop(Error::closed());
                 };
                 let (pipe, state) = PipeState::pair_with_lifetime(
                     pipe_id,
@@ -357,13 +365,8 @@ impl FrameContext<'_, '_> {
             )
             .await;
         }
-        if self
-            .link
-            .send(Frame::OfferAccepted { pipe_id })
-            .await
-            .is_err()
-        {
-            return RelayFrameAction::Stop;
+        if let Err(error) = self.link.send(Frame::OfferAccepted { pipe_id }).await {
+            return RelayFrameAction::Stop(error);
         }
         self.settle()
     }
@@ -373,7 +376,7 @@ impl FrameContext<'_, '_> {
             return RelayFrameAction::Continue;
         };
         let Some(lifetime) = self.inner.lifetime.upgrade() else {
-            return RelayFrameAction::Stop;
+            return RelayFrameAction::Stop(Error::closed());
         };
         let (pipe, state) = PipeState::pair_with_lifetime(
             pipe_id,
@@ -400,8 +403,8 @@ impl FrameContext<'_, '_> {
                     listener: None,
                 },
             );
-        } else if self.link.send(Frame::Cancel { pipe_id }).await.is_err() {
-            return RelayFrameAction::Stop;
+        } else if let Err(error) = self.link.send(Frame::Cancel { pipe_id }).await {
+            return RelayFrameAction::Stop(error);
         }
         self.settle()
     }
@@ -414,8 +417,9 @@ impl FrameContext<'_, '_> {
         message: String,
     ) -> RelayFrameAction {
         if let Some(pending) = self.session.pending_dials.remove(&connection_id) {
-            let _ = pending.response.send(Err(Error::new(
-                ErrorCode::from_wire(code),
+            let _ = pending.response.send(Err(Error::from_gateway_operation(
+                "DIAL",
+                code,
                 PeerObservation::from_wire(observation),
                 message,
             )));
@@ -433,10 +437,14 @@ impl FrameContext<'_, '_> {
             if let Some(pipe) = self.session.pipes.remove(&pipe_id) {
                 pipe.state.fail(error.clone());
                 if !pipe.compact_listener_queue() {
-                    return RelayFrameAction::Stop;
+                    return RelayFrameAction::Stop(Error::new(
+                        ErrorCode::Internal,
+                        PeerObservation::NotObserved,
+                        "Listener queue or runtime invariant failed",
+                    ));
                 }
             }
-            if self
+            if let Err(error) = self
                 .link
                 .send(Frame::Reset {
                     pipe_id,
@@ -444,9 +452,8 @@ impl FrameContext<'_, '_> {
                     message: error.message().to_owned(),
                 })
                 .await
-                .is_err()
             {
-                return RelayFrameAction::Stop;
+                return RelayFrameAction::Stop(error);
             }
         }
         self.settle()
@@ -466,7 +473,11 @@ impl FrameContext<'_, '_> {
             && let Some(pipe) = self.session.pipes.remove(&pipe_id)
             && !pipe.compact_listener_queue()
         {
-            return RelayFrameAction::Stop;
+            return RelayFrameAction::Stop(Error::new(
+                ErrorCode::Internal,
+                PeerObservation::NotObserved,
+                "Listener queue or runtime invariant failed",
+            ));
         }
         self.settle()
     }
@@ -475,7 +486,11 @@ impl FrameContext<'_, '_> {
         if let Some(pipe) = self.session.pipes.remove(&pipe_id) {
             pipe.state.close_normal();
             if !pipe.compact_listener_queue() {
-                return RelayFrameAction::Stop;
+                return RelayFrameAction::Stop(Error::new(
+                    ErrorCode::Internal,
+                    PeerObservation::NotObserved,
+                    "Listener queue or runtime invariant failed",
+                ));
             }
         }
         self.settle()
@@ -488,19 +503,23 @@ impl FrameContext<'_, '_> {
         message: String,
     ) -> RelayFrameAction {
         if let Some(pipe) = self.session.pipes.remove(&pipe_id) {
-            pipe.state.fail(Error::new(
-                ErrorCode::from_wire(code),
+            pipe.state.fail(Error::from_gateway(
+                code,
                 PeerObservation::Observed,
                 message,
             ));
             if !pipe.compact_listener_queue() {
-                return RelayFrameAction::Stop;
+                return RelayFrameAction::Stop(Error::new(
+                    ErrorCode::Internal,
+                    PeerObservation::NotObserved,
+                    "Listener queue or runtime invariant failed",
+                ));
             }
         } else if pipe_id.origin_session_id() == self.session_id
             && let Some(pending) = self.session.pending_dials.remove(&pipe_id.connection_id())
         {
-            let _ = pending.response.send(Err(Error::new(
-                ErrorCode::from_wire(code),
+            let _ = pending.response.send(Err(Error::from_gateway(
+                code,
                 PeerObservation::Observed,
                 message,
             )));
@@ -509,8 +528,8 @@ impl FrameContext<'_, '_> {
     }
 
     async fn on_ping(&mut self, nonce: u64) -> RelayFrameAction {
-        if self.link.send(Frame::Pong { nonce }).await.is_err() {
-            return RelayFrameAction::Stop;
+        if let Err(error) = self.link.send(Frame::Pong { nonce }).await {
+            return RelayFrameAction::Stop(error);
         }
         self.settle()
     }
@@ -532,11 +551,10 @@ async fn reject_offer(
     )
 }
 
-fn listener_frame_action<T, E>(result: Result<T, E>) -> RelayFrameAction {
-    if result.is_ok() {
-        RelayFrameAction::Continue
-    } else {
-        RelayFrameAction::Stop
+fn listener_frame_action<T>(result: crate::Result<T>) -> RelayFrameAction {
+    match result {
+        Ok(_) => RelayFrameAction::Continue,
+        Err(error) => RelayFrameAction::Stop(error),
     }
 }
 
