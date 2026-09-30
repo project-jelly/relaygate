@@ -60,7 +60,7 @@ payload와 free-form error body는 redaction합니다. DATA RTT와 payload goodp
 | 구간 | metric | 측정 경계 |
 | --- | --- | --- |
 | GW DIAL | `relaygate_gateway_dial_requests_total`, `relaygate_gateway_dial_results_total`, `relaygate_gateway_dial_duration_seconds` | precheck 진입 -> OPENED/failure/cancel |
-| SDK 접속·DIAL | `relaygate_sdk_operation_results_total`, `relaygate_sdk_operation_duration_seconds` | `session_connect`: transport·TLS·HELLO/WELCOME; `dial`: API 진입 -> Pipe/실패/cancel |
+| SDK 접속·DIAL | `relaygate_sdk_operation_results_total`, `relaygate_sdk_operation_duration_seconds` | `session_connect`: transport·TLS·HELLO/WELCOME. 최초 수립은 재시도·backoff 포함 최종 결과 1회, managed reconnect는 시도당 1회; `dial`: API 진입 -> Pipe/실패/cancel |
 | publish | `relaygate_gateway_publish_results_total` | terminal result counter |
 | authorization | `relaygate_gateway_authorization_results_total`, `relaygate_gateway_authorization_duration_seconds` | verifier start -> success/failure |
 | heartbeat | timeout counter + `relaygate_gateway_heartbeat_duration_seconds{transport}` | committed PING -> matching PONG |
@@ -164,6 +164,6 @@ lifecycle log가 담당합니다.
 | `OBS-009` | SDK admission ready는 non-draining, transport·handshake slot 여유와 rate budget 여유의 conjunction이다. |
 | `OBS-010` | Dashboard runtime selector는 cluster·namespace 범위를 일관되게 적용한다. |
 | `OBS-011` | 고유 Pipe와 GW-local Pipe state를 구분하며 resource used/limit 집계 기준을 일치시킨다. |
-| `OBS-012` | SDK 계측은 error·polled future cancel·reconnect 미완료와 종료를 구분한다. |
+| `OBS-012` | SDK 계측은 error·polled future cancel·reconnect 미완료와 종료를 구분한다. 최초 연결의 전체 deadline 소진은 `error/deadline_exceeded`, caller의 polled future 취소는 `cancelled/cancelled`로 각각 1회 기록한다. |
 | `OBS-013` | 결과 분류와 gauge/rate 단위를 유지하고 실제 PromQL 기대값으로 검증한다. |
 | `OBS-014` | SDK live Pipe·buffered byte 점유는 cleanup 뒤 기준값으로 수렴하고 resource rejection은 bounded `resource` label로 구분한다. |

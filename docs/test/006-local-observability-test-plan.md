@@ -79,7 +79,7 @@ echo goodput은 성공한 왕복 payload bytes / 측정 구간이며 streaming �
 | --- | --- | --- |
 | `OBS-010`, `OBS-013` | `.github/scripts/test_observability.py` + pinned `promtool` | 다른 cluster·namespace의 sentinel 제외, 세 화면의 중첩 패널 PromQL 파싱, 미수집은 No data |
 | `OBS-011` | Gateway local/three-Gateway tests + PromQL fixture | local Pipe 1회, remote Pipe 호출 GW 1회·양단 상태 2개, 종료 후 0, used/limit 비율 |
-| `OBS-012` | SDK observability contract tests | 중첩 reconnect 2→1→0, close/drop cleanup, polled dial 취소 1회 기록 |
+| `OBS-012` | SDK observability contract tests | 중첩 reconnect 2→1→0, close/drop cleanup, polled dial 취소 1회; initial connect handshake/backoff deadline·caller cancel·재시도 후 성공을 각각 최종 결과 1회로 기록, reconnect 시도 deadline 계측 유지 |
 | `OBS-008` | Compose `latency` + JSON validator | 9개 경로, 요청 sample 전부 완료, byte 수와 RTT 분위수 일치 |
 | `OBS-002` | Compose traffic 종료 후 metric 검사 | GW session·binding·pending·Pipe·stream과 RT mapping이 0으로 복귀 |
 | `OBS-003`, `OBS-005`, `OBS-006` | Gateway authorization unit/integration + metrics scrape | publish/dial authorization 결과·시간의 bounded label, raw token·claim 0건 |

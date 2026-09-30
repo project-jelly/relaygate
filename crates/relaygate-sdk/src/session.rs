@@ -24,13 +24,18 @@ pub(crate) struct EstablishedSession {
 }
 
 pub(crate) async fn establish_initial(config: &Config) -> Result<EstablishedSession> {
-    crate::retry::retry_precommit(
-        config.connect_deadline()?,
-        ReconnectBackoff::new(config.reconnect_initial, config.reconnect_maximum),
-        &CancellationToken::new(),
-        Error::transport_deadline("Gateway connection or handshake deadline exceeded"),
-        || establish(config),
-    )
+    // Observe the whole initial connection: its outer deadline must resolve
+    // before the metric guard, rather than dropping an observed inner attempt.
+    crate::observability::observe("session_connect", async {
+        crate::retry::retry_precommit(
+            config.connect_deadline()?,
+            ReconnectBackoff::new(config.reconnect_initial, config.reconnect_maximum),
+            &CancellationToken::new(),
+            Error::transport_deadline("Gateway connection or handshake deadline exceeded"),
+            || establish_inner(config),
+        )
+        .await
+    })
     .await
 }
 
