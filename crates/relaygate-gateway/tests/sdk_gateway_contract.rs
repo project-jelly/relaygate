@@ -57,12 +57,29 @@ async fn sdk_gateway_path_uses_tls_before_operation_authorization() -> TestResul
         .err()
         .ok_or("invalid access token authorized PUBLISH over TLS")?;
     assert_eq!(rejected.code(), relaygate_sdk::ErrorCode::Unauthenticated);
+    assert_eq!(rejected.origin(), relaygate_sdk::ErrorOrigin::Gateway);
+    assert!(rejected.message().contains("PUBLISH authentication failed"));
     let listener = relay
         .listen(
             destination.clone(),
             token_source(&destination, AccessAction::Publish)?,
         )
         .await?;
+    let denied = relay
+        .dial(
+            destination.clone(),
+            token_source(&destination, AccessAction::Publish)?,
+        )
+        .await
+        .err()
+        .ok_or("PUBLISH grant authorized DIAL")?;
+    assert_eq!(denied.code(), relaygate_sdk::ErrorCode::PermissionDenied);
+    assert_eq!(denied.origin(), relaygate_sdk::ErrorOrigin::Gateway);
+    assert_eq!(
+        denied.observation(),
+        relaygate_sdk::PeerObservation::NotObserved
+    );
+    assert!(denied.message().contains("DIAL authorization was denied"));
     listener.close().await?;
 
     relay.close();

@@ -7,7 +7,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 
-use crate::{Config, Error, ErrorCode, PeerObservation, Result};
+use crate::{Config, Error, ErrorCode, ErrorOrigin, PeerObservation, Result};
 
 mod outbound;
 
@@ -24,38 +24,44 @@ pub(crate) struct EstablishedSession {
 }
 
 pub(crate) async fn establish(config: &Config) -> Result<EstablishedSession> {
-    crate::observability::observe("session_connect", establish_inner(config)).await
+    crate::observability::observe("session_connect", async {
+        timeout(config.connect_timeout, establish_inner(config))
+            .await
+            .map_err(|_| {
+                Error::new(
+                    ErrorCode::DeadlineExceeded,
+                    PeerObservation::NotObserved,
+                    "Gateway connection or handshake deadline exceeded",
+                )
+                .with_origin(ErrorOrigin::Transport)
+            })?
+    })
+    .await
 }
 
 async fn establish_inner(config: &Config) -> Result<EstablishedSession> {
-    let stream = config.transport.connect(config.connect_timeout).await?;
+    let stream = config.transport.connect().await?;
     let mut transport = Framed::with_capacity(
         stream,
         FrameCodec::new(DEFAULT_MAX_FRAME_LEN),
         SDK_FRAME_INITIAL_CAPACITY,
     );
     transport.set_backpressure_boundary(SDK_FRAME_WRITE_BACKPRESSURE_BOUNDARY);
-    timeout(config.connect_timeout, transport.send(Frame::Hello))
+    transport
+        .send(Frame::Hello)
         .await
-        .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
-        .map_err(|error| Error::unavailable(format!("session hello failed: {error}")))?;
-    let frame = timeout(config.connect_timeout, transport.next())
+        .map_err(|error| Error::transport_unavailable(format!("session HELLO failed: {error}")))?;
+    let frame = transport
+        .next()
         .await
-        .map_err(|_| Error::deadline(PeerObservation::NotObserved))?
-        .ok_or_else(|| Error::unavailable("Gateway closed before WELCOME"))?
-        .map_err(|error| {
-            Error::new(
-                ErrorCode::ProtocolError,
-                PeerObservation::NotObserved,
-                format!("WELCOME decode failed: {error}"),
-            )
-        })?;
+        .ok_or_else(|| Error::transport_unavailable("Gateway closed before WELCOME"))?
+        .map_err(|error| Error::from_protocol(error, "WELCOME decode failed"))?;
     let session_id = match frame {
         Frame::Welcome { session_id } => session_id,
         Frame::SessionRejected { code, message } => {
-            return Err(Error::new(
-                ErrorCode::from_wire(code),
-                PeerObservation::Observed,
+            return Err(Error::from_gateway(
+                code,
+                PeerObservation::NotObserved,
                 message,
             ));
         }
@@ -64,7 +70,8 @@ async fn establish_inner(config: &Config) -> Result<EstablishedSession> {
                 ErrorCode::ProtocolError,
                 PeerObservation::NotObserved,
                 "first Gateway response was not WELCOME",
-            ));
+            )
+            .with_origin(ErrorOrigin::Transport));
         }
     };
     tracing::debug!(
@@ -99,7 +106,7 @@ impl<'a> SessionLink<'a> {
         }
     }
 
-    pub(crate) async fn send(&mut self, frame: Frame) -> std::result::Result<(), ()> {
+    pub(crate) async fn send(&mut self, frame: Frame) -> Result<()> {
         send_bounded(self.transport, frame, self.timeout, self.cancel).await
     }
 }
@@ -109,14 +116,15 @@ pub(crate) async fn send_bounded(
     frame: Frame,
     duration: Duration,
     cancel: &CancellationToken,
-) -> std::result::Result<(), ()> {
+) -> Result<()> {
     tokio::select! {
         biased;
-        _ = cancel.cancelled() => Err(()),
+        _ = cancel.cancelled() => Err(Error::new(ErrorCode::Cancelled, PeerObservation::NotObserved, "RelaySession frame write was cancelled")),
         result = timeout(duration, transport.send(frame)) => {
             match result {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(_)) | Err(_) => Err(()),
+                Ok(Err(error)) => Err(Error::from_protocol(error, "RelaySession frame write failed")),
+                Err(_) => Err(Error::transport_deadline("RelaySession frame write deadline exceeded")),
             }
         }
     }

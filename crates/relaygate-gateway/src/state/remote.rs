@@ -143,6 +143,7 @@ impl GatewayState {
         ) {
             return Vec::new();
         }
+        let (code, message) = sdk_dependency_failure(code, message);
         self.fail_remote_attempt(open_identity, code, PeerObservation::NotObserved, message)
     }
 
@@ -215,6 +216,7 @@ impl GatewayState {
         ) {
             return Vec::new();
         }
+        let (code, message) = sdk_dependency_failure(code, message);
         self.fail_remote_attempt(open_identity, code, observation, message)
     }
 
@@ -458,6 +460,7 @@ impl GatewayState {
         if !self.peer_event_matches_attempt(open_identity, key) {
             return Vec::new();
         }
+        let (code, message) = sdk_dependency_failure(code, message);
         self.fail_remote_attempt(open_identity, code, observation, message)
     }
 
@@ -572,5 +575,25 @@ impl GatewayState {
         let attempt = self.remote_open_attempts.remove(&open_identity)?;
         self.active_peer_opens.remove(&open_identity);
         Some(attempt)
+    }
+}
+
+// Operation JWTs were already checked before RouteTable/peer admission. Their
+// infrastructure credentials cannot be repaired by an application token refresh.
+fn sdk_dependency_failure(code: ErrorCode, message: &str) -> (ErrorCode, &str) {
+    match code {
+        ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => {
+            tracing::warn!(
+                component = "gateway",
+                event = "gateway.dependency.authorization_failed",
+                error_code = ?code,
+                "Gateway internal dependency authentication or authorization failed"
+            );
+            (
+                ErrorCode::Internal,
+                "Gateway internal dependency authentication or authorization failed",
+            )
+        }
+        _ => (code, message),
     }
 }
