@@ -74,14 +74,17 @@ fn cancelled_relay_status_transition_closes_instead_of_resurrecting() {
         desired: StdMutex::new(HashMap::new()),
         current,
         status,
+        last_error: StdMutex::new(None),
         reconcile: Arc::new(Notify::new()),
         cancel: cancel.clone(),
         lifetime: Weak::<RuntimeLifetime>::new(),
     };
 
+    inner.set_relay_error(Some(Error::unavailable("reconnect failed")));
     cancel.cancel();
     inner.set_relay_status(RelayStatus::Reconnecting);
     assert_eq!(*inner.status.borrow(), RelayStatus::Closed);
+    assert!(inner.relay_error().is_none());
     inner.set_relay_status(RelayStatus::Active);
     assert_eq!(*inner.status.borrow(), RelayStatus::Closed);
 }
@@ -106,6 +109,7 @@ async fn repeated_republish_failures_share_one_bounded_retry_timer() -> TestResu
         desired: StdMutex::new(HashMap::new()),
         current,
         status,
+        last_error: StdMutex::new(None),
         reconcile: Arc::new(Notify::new()),
         cancel: cancel.clone(),
         lifetime: Weak::<RuntimeLifetime>::new(),
@@ -229,6 +233,7 @@ fn reconnect_settlement_ignores_initial_listens_that_were_never_returned() -> Te
         desired: StdMutex::new(HashMap::from([returned, pending])),
         current,
         status: relay_status,
+        last_error: StdMutex::new(None),
         reconcile: Arc::new(Notify::new()),
         cancel: CancellationToken::new(),
         lifetime: Weak::<RuntimeLifetime>::new(),
@@ -245,5 +250,42 @@ fn reconnect_settlement_ignores_initial_listens_that_were_never_returned() -> Te
         inner.desired_settlement(),
         super::DesiredSettlement::Recovered
     ));
+    Ok(())
+}
+
+#[test]
+fn initial_deadline_uses_registration_progress() -> TestResult {
+    use crate::{ErrorCode, ErrorOrigin, PeerObservation};
+    for (progress, origin, observation) in [
+        (0, ErrorOrigin::Transport, PeerObservation::NotObserved),
+        (1, ErrorOrigin::TokenSource, PeerObservation::NotObserved),
+        (2, ErrorOrigin::Transport, PeerObservation::MaybeObserved),
+    ] {
+        let (status, _) = watch::channel(ListenerStatus::Registering);
+        let (incoming_tx, incoming_rx) = mpsc::channel(1);
+        let state = ListenerState {
+            destination: "test/deadline".parse()?,
+            access_token_source: AccessToken::new("grant")?.into(),
+            status,
+            incoming_tx,
+            incoming_rx: tokio::sync::Mutex::new(incoming_rx),
+            initial_deadline: Instant::now(),
+            runtime: StdMutex::new(ListenerRuntime::new(ListenerLifecycle::Pending)),
+            live_pipe_slots: Arc::new(Semaphore::new(1)),
+        };
+        if progress > 0 {
+            assert!(state.begin_token_supply());
+        }
+        if progress > 1 {
+            assert!(state.begin_registration_commit());
+        }
+        let error = state
+            .terminate_initial_operation(ErrorCode::DeadlineExceeded, "deadline", true)
+            .ok_or("initial operation did not expire")?;
+        assert_eq!(error.origin(), origin);
+        assert_eq!(error.observation(), observation);
+        assert_eq!(state.last_error(), Some(error));
+        assert_eq!(*state.status.borrow(), ListenerStatus::Closed);
+    }
     Ok(())
 }

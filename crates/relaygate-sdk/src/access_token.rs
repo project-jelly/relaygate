@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use relaygate_protocol::{BearerToken, MAX_BEARER_TOKEN_BYTES};
 
-use crate::{Destination, Error, ErrorCode, PeerObservation};
+use crate::{Destination, Error, ErrorCode, ErrorOrigin, PeerObservation};
 
 /// An access token supplied for one `listen` or `dial` admission decision.
 #[derive(Clone, PartialEq, Eq)]
@@ -122,14 +122,16 @@ impl AccessTokenSource {
     }
 
     pub(crate) async fn supply(&self, request: AccessTokenRequest) -> Result<BearerToken, Error> {
+        let action = request.action;
         let token = match &self.0 {
             AccessTokenSourceInner::Static(token) => token.clone(),
             AccessTokenSourceInner::Dynamic(callback) => callback(request).await.map_err(|_| {
                 Error::new(
                     ErrorCode::Unavailable,
                     PeerObservation::NotObserved,
-                    "access token source is unavailable",
+                    format!("application token source failed to supply {action:?} token"),
                 )
+                .with_origin(ErrorOrigin::TokenSource)
             })?,
         };
         Ok(token.0)
@@ -203,6 +205,28 @@ mod tests {
                 .await?;
         }
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn token_source_failure_identifies_application_dependency()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceError) });
+        let result = source
+            .supply(AccessTokenRequest {
+                action: AccessAction::Publish,
+                destination: destination()?,
+            })
+            .await;
+        let error = match result {
+            Ok(_) => return Err("token source failure must be returned".into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::Unavailable);
+        assert_eq!(error.origin(), ErrorOrigin::TokenSource);
+        assert_eq!(error.observation(), PeerObservation::NotObserved);
+        assert!(error.message().contains("Publish token"));
+        assert!(error.is_retryable());
         Ok(())
     }
 }

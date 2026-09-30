@@ -1,3 +1,5 @@
+mod diagnostics;
+
 use std::{
     error::Error as StdError,
     sync::{
@@ -22,8 +24,8 @@ use tokio_util::codec::Framed;
 
 use super::{ReconnectBackoff, SessionHeartbeat};
 use crate::{
-    AccessToken, AccessTokenSource, Config, Destination, ErrorCode, GatewayTransportConfig,
-    ListenerStatus, PeerObservation, Relay, RelayStatus,
+    AccessToken, AccessTokenSource, Config, Destination, ErrorCode, ErrorOrigin,
+    GatewayTransportConfig, ListenerStatus, PeerObservation, Relay, RelayStatus,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
@@ -64,6 +66,7 @@ async fn connect_timeout_covers_tls_and_welcome_together() -> TestResult {
             &result,
             Err(error) if error.code() == ErrorCode::DeadlineExceeded
                 && error.observation() == PeerObservation::NotObserved
+                && error.origin() == ErrorOrigin::Transport
         ),
         "connection result: {:?}",
         result.as_ref().map(|_| ())
@@ -413,6 +416,99 @@ async fn relay_status_reports_reconnecting_and_wait_ready_recovers() -> TestResu
 }
 
 #[tokio::test]
+async fn reconnect_error_is_visible_until_recovery() -> TestResult {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (drop_first_tx, drop_first_rx) = oneshot::channel();
+    let (third_hello_tx, third_hello_rx) = oneshot::channel();
+    let (welcome_third_tx, welcome_third_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await?;
+        let mut first = Framed::new(first_stream, FrameCodec::new(DEFAULT_MAX_FRAME_LEN));
+        if !matches!(
+            first.next().await.ok_or("missing first HELLO")??,
+            Frame::Hello
+        ) {
+            return Err::<(), Box<dyn StdError + Send + Sync>>("invalid first HELLO".into());
+        }
+        first
+            .send(Frame::Welcome {
+                session_id: SessionId::new(),
+            })
+            .await?;
+        drop_first_rx.await?;
+        drop(first);
+
+        let (second_stream, _) = listener.accept().await?;
+        let mut second = Framed::new(second_stream, FrameCodec::new(DEFAULT_MAX_FRAME_LEN));
+        if !matches!(
+            second.next().await.ok_or("missing second HELLO")??,
+            Frame::Hello
+        ) {
+            return Err("invalid second HELLO".into());
+        }
+        second
+            .send(Frame::SessionRejected {
+                code: relaygate_protocol::ErrorCode::Unavailable,
+                message: "temporary Gateway refusal".to_owned(),
+            })
+            .await?;
+        drop(second);
+
+        let (third_stream, _) = listener.accept().await?;
+        let mut third = Framed::new(third_stream, FrameCodec::new(DEFAULT_MAX_FRAME_LEN));
+        if !matches!(
+            third.next().await.ok_or("missing third HELLO")??,
+            Frame::Hello
+        ) {
+            return Err("invalid third HELLO".into());
+        }
+        let _ = third_hello_tx.send(());
+        welcome_third_rx.await?;
+        third
+            .send(Frame::Welcome {
+                session_id: SessionId::new(),
+            })
+            .await?;
+        let _ = shutdown_rx.await;
+        Ok::<(), Box<dyn StdError + Send + Sync>>(())
+    });
+
+    let relay = Relay::connect(
+        Config::new_insecure_for_tests(address.to_string())
+            .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
+    )
+    .await?;
+    assert!(relay.last_error().is_none());
+    drop_first_tx
+        .send(())
+        .map_err(|_| "fake Gateway stopped before first-session drop")?;
+    timeout(Duration::from_secs(1), third_hello_rx).await??;
+    assert_eq!(relay.status(), RelayStatus::Reconnecting);
+    assert_eq!(
+        relay.last_error().map(|error| error.code()),
+        Some(ErrorCode::Unavailable)
+    );
+    assert_eq!(
+        relay.last_error().map(|error| error.origin()),
+        Some(ErrorOrigin::Gateway)
+    );
+
+    welcome_third_tx
+        .send(())
+        .map_err(|_| "fake Gateway stopped before third WELCOME")?;
+    timeout(Duration::from_secs(1), relay.wait_ready()).await??;
+    assert_eq!(relay.status(), RelayStatus::Active);
+    assert!(relay.last_error().is_none());
+    relay.close();
+    assert!(relay.last_error().is_none());
+    let _ = shutdown_tx.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn relay_close_is_terminal_during_reconnect_handshake() -> TestResult {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -611,6 +707,7 @@ async fn returned_listener_republishes_after_unexpected_runtime_frame() -> TestR
         )
         .await?;
     assert_eq!(publication.status(), ListenerStatus::Active);
+    assert!(publication.last_error().is_none());
     let mut publication_status = publication.subscribe_status();
     send_unexpected
         .send(())
@@ -619,6 +716,13 @@ async fn returned_listener_republishes_after_unexpected_runtime_frame() -> TestR
     assert_eq!(
         timeout(Duration::from_secs(1), publication_status.changed()).await?,
         Some(ListenerStatus::Suspended)
+    );
+    let failure = publication.last_error().ok_or("missing protocol failure")?;
+    assert_eq!(failure.code(), ErrorCode::ProtocolError);
+    assert_eq!(failure.origin(), ErrorOrigin::Transport);
+    assert_eq!(
+        relay.last_error().map(|error| error.code()),
+        Some(ErrorCode::ProtocolError)
     );
     welcome_second_tx
         .send(())
@@ -642,6 +746,7 @@ async fn returned_listener_republishes_after_unexpected_runtime_frame() -> TestR
         }
     })
     .await??;
+    assert!(publication.last_error().is_none());
 
     relay.close();
     let _ = send_shutdown.send(());
@@ -795,6 +900,14 @@ fn permanent_republish_failure_settles_reconnect_episode_as_degraded() -> TestRe
                 .await??;
                 assert_eq!(relay.status(), RelayStatus::Active);
                 assert_eq!(publication.status(), ListenerStatus::Blocked);
+                assert_eq!(
+                    publication.last_error().map(|error| error.code()),
+                    Some(ErrorCode::PermissionDenied)
+                );
+                assert_eq!(
+                    publication.last_error().map(|error| error.origin()),
+                    Some(ErrorOrigin::Gateway)
+                );
                 drop(publication);
 
                 timeout(Duration::from_secs(1), async {
