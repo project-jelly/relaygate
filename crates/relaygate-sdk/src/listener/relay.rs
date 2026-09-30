@@ -407,6 +407,10 @@ impl Relay {
 
     /// Waits until a current Relay session is active.
     ///
+    /// Does not wait for Listener republish or imply that a Listener is ready.
+    /// This wait has no built-in deadline; wrap it in `tokio::time::timeout`
+    /// when the application needs a bounded wait.
+    ///
     /// Returns [`ErrorCode::Cancelled`] when the Relay has already closed.
     pub async fn wait_ready(&self) -> Result<()> {
         let mut status = self.inner.status.subscribe();

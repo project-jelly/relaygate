@@ -20,30 +20,30 @@ and a TLS failure never falls back to plaintext.
 
 Every `listen` and `dial` supplies an application-issued operation token.
 RelayGate does not issue, refresh, or persist these credentials. Production
-applications should use `AccessTokenSource::dynamic` to fetch short-lived token
+applications should use `AccessTokenSource::dynamic_with_errors` to fetch short-lived token
 material from their own backend. The helper below uses an environment variable
 only as a compileable stand-in for that backend boundary; do not hard-code raw
 tokens in source.
 
 ```no_run
 use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
+    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure,
 };
 
 async fn token_from_application_backend(
     _request: AccessTokenRequest,
-) -> Result<AccessToken, AccessTokenSourceError> {
+) -> Result<AccessToken, AccessTokenSourceFailure> {
     // Replace this stand-in with an authenticated call to your application backend.
     let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-        .map_err(|_| AccessTokenSourceError)?;
-    AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
+        .map_err(|_| AccessTokenSourceFailure::Unauthenticated)?;
+    AccessToken::new(raw).map_err(|_| AccessTokenSourceFailure::Unauthenticated)
 }
 
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
 # let _ = tokens;
 ```
 
-Use `dynamic_with_errors` when the provider can distinguish failures:
+The backend adapter classifies failures by their meaning:
 
 | `AccessTokenSourceFailure` | Provider condition | SDK behavior |
 | --- | --- | --- |
@@ -51,16 +51,9 @@ Use `dynamic_with_errors` when the provider can distinguish failures:
 | `Unauthenticated` | Application authentication must be restored | Return error / block returned Listener |
 | `PermissionDenied` | Permission to obtain the operation token was denied | Return error / block returned Listener |
 
-```no_run
-use relaygate_sdk::{AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure};
-
-# async fn token_from_backend(_request: AccessTokenRequest) -> Result<AccessToken, AccessTokenSourceFailure> {
-#     Err(AccessTokenSourceFailure::Unavailable)
-# }
-// The backend adapter maps its errors to the three categories above.
-let tokens = AccessTokenSource::dynamic_with_errors(token_from_backend);
-# let _ = tokens;
-```
+Existing `AccessTokenSource::dynamic` callbacks remain supported. Their
+`AccessTokenSourceError` always means a transient failure; use
+`dynamic_with_errors` to stop retrying authentication or permission failures.
 
 Both callbacks may run concurrently for distinct operations. Map failures by
 backend semantics, not diagnostic text. Provider response bodies and credentials
@@ -120,6 +113,32 @@ An initial `SessionRejected` has `NotObserved` metadata because no session was
 admitted. `Unavailable` and `ResourceExhausted` permit a new connection attempt
 after backoff. A committed DIAL remains `MaybeObserved` when its result is lost.
 
+For a blocked Listener, read its error before closing it. Restore application
+access first, then replace only that Listener:
+
+```no_run
+use relaygate_sdk::{AccessTokenSource, ErrorCode, ErrorOrigin, Listener, Relay};
+
+# async fn replace_blocked(
+#     relay: &Relay, blocked: &Listener, destination: relaygate_sdk::Destination,
+#     replacement_source: AccessTokenSource,
+# ) -> Result<Listener, Box<dyn std::error::Error>> {
+let error = blocked.last_error().ok_or("no registration error")?;
+match (error.origin(), error.code()) {
+    (ErrorOrigin::TokenSource, ErrorCode::Unauthenticated) => {
+        // Restore application authentication before providing replacement_source.
+    }
+    (ErrorOrigin::TokenSource, ErrorCode::PermissionDenied) => {
+        // Restore permission for this action and Destination first.
+    }
+    _ => return Err(error.into()),
+}
+blocked.close().await?;
+let replacement = relay.listen(destination, replacement_source).await?;
+# Ok(replacement)
+# }
+```
+
 ## Publish and accept Pipes
 
 `Relay::listen` waits for the initial Gateway-local binding. A returned
@@ -135,7 +154,7 @@ so read `Relay::last_error()` when inspecting a reconnecting Relay.
 
 ```no_run
 use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
+    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure,
     Config, Destination, ListenerStatus, Relay, RelayStatus,
 };
 use std::sync::Arc;
@@ -143,10 +162,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 # async fn token_from_application_backend(
 #     _request: AccessTokenRequest,
-# ) -> Result<AccessToken, AccessTokenSourceError> {
+# ) -> Result<AccessToken, AccessTokenSourceFailure> {
 #     let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-#         .map_err(|_| AccessTokenSourceError)?;
-#     AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
+#         .map_err(|_| AccessTokenSourceFailure::Unauthenticated)?;
+#     AccessToken::new(raw).map_err(|_| AccessTokenSourceFailure::Unauthenticated)
 # }
 # async fn provider() -> Result<(), Box<dyn std::error::Error>> {
 let relay = Relay::connect(Config::new("relaygate.example.com:443")?).await?;
@@ -162,7 +181,7 @@ let relay_observer = tokio::spawn(async move {
 });
 
 let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
 let listener = Arc::new(relay.listen(destination, tokens).await?);
 let observed_listener = Arc::clone(&listener);
 let mut listener_status = listener.subscribe_status();
@@ -205,17 +224,17 @@ not wait for Listener registration and has no built-in deadline.
 
 ```no_run
 use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
+    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure,
     Config, Destination, Error, Relay, RelayStatus,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 # async fn token_from_application_backend(
 #     _request: AccessTokenRequest,
-# ) -> Result<AccessToken, AccessTokenSourceError> {
+# ) -> Result<AccessToken, AccessTokenSourceFailure> {
 #     let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-#         .map_err(|_| AccessTokenSourceError)?;
-#     AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
+#         .map_err(|_| AccessTokenSourceFailure::Unauthenticated)?;
+#     AccessToken::new(raw).map_err(|_| AccessTokenSourceFailure::Unauthenticated)
 # }
 # async fn dialer() -> Result<(), Box<dyn std::error::Error>> {
 let relay = Relay::connect(Config::new("relaygate.example.com:443")?).await?;
@@ -231,7 +250,7 @@ let observer = tokio::spawn(async move {
 });
 
 let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
 let mut pipe = relay.dial(destination, tokens).await?;
 pipe.write_all(b"transcribe this audio").await?;
 pipe.shutdown_write().await?;
