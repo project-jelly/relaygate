@@ -1,4 +1,5 @@
 mod diagnostics;
+mod token_source;
 
 use std::{
     error::Error as StdError,

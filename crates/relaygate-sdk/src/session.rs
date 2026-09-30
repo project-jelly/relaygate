@@ -23,6 +23,17 @@ pub(crate) struct EstablishedSession {
     pub(crate) transport: WireTransport,
 }
 
+pub(crate) async fn establish_initial(config: &Config) -> Result<EstablishedSession> {
+    crate::retry::retry_precommit(
+        config.connect_deadline()?,
+        ReconnectBackoff::new(config.reconnect_initial, config.reconnect_maximum),
+        &CancellationToken::new(),
+        Error::transport_deadline("Gateway connection or handshake deadline exceeded"),
+        || establish(config),
+    )
+    .await
+}
+
 pub(crate) async fn establish(config: &Config) -> Result<EstablishedSession> {
     crate::observability::observe("session_connect", async {
         timeout(config.connect_timeout, establish_inner(config))

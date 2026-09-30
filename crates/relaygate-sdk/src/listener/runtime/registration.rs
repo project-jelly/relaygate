@@ -9,7 +9,7 @@ use super::{PendingRegistration, RelaySessionState};
 use crate::{
     AccessAction, AccessTokenRequest, Destination, Error, ErrorCode, PeerObservation,
     listener::{ListenerState, ListenerStatus, RelayInner, is_current_desired},
-    session::{EstablishedSession, send_bounded},
+    session::{EstablishedSession, ReconnectBackoff, send_bounded},
 };
 
 pub(super) async fn reconcile_registrations(
@@ -149,18 +149,39 @@ pub(super) async fn reconcile_registrations(
             .insert(state.destination.clone(), request_id);
         let source = state.access_token_source.clone();
         let destination = state.destination.clone();
+        let retry_initial = !state.was_returned();
+        let backoff = ReconnectBackoff::new(
+            inner.config.reconnect_initial,
+            inner.config.reconnect_maximum,
+        );
+        let cancel = inner.cancel.clone();
+        let mut status = state.status.subscribe();
         session.token_supplies.push(
             async move {
-                let result = timeout_at(
-                    deadline,
-                    source.supply(AccessTokenRequest {
+                let supply = async {
+                    let request = AccessTokenRequest {
                         action: AccessAction::Publish,
                         destination,
-                    }),
-                )
-                .await
-                .map_err(|_| Error::token_source_deadline())
-                .and_then(|result| result);
+                    };
+                    if retry_initial {
+                        source.supply_with_retry(request, deadline, backoff, &cancel).await
+                    } else {
+                        // Returned Listeners already share one Relay retry timer.
+                        timeout_at(deadline, source.supply(request))
+                            .await
+                            .map_err(|_| Error::token_source_deadline())
+                            .and_then(|result| result)
+                    }
+                };
+                let result = tokio::select! {
+                    biased;
+                    _ = async {
+                        while !matches!(*status.borrow(), ListenerStatus::Closed | ListenerStatus::Blocked) {
+                            if status.changed().await.is_err() { break; }
+                        }
+                    } => Err(Error::closed()),
+                    result = supply => result,
+                };
                 (request_id, result)
             }
             .boxed(),
@@ -193,11 +214,11 @@ pub(super) async fn commit_registration_token(
     let token = match token {
         Ok(token) if pending.deadline > Instant::now() => token,
         Ok(_) => {
-            handle_token_source_error(inner, &state, Error::token_source_deadline());
+            handle_token_source_error(inner, &state, Error::token_source_deadline()).await;
             return Ok(());
         }
         Err(error) => {
-            handle_token_source_error(inner, &state, error);
+            handle_token_source_error(inner, &state, error).await;
             return Ok(());
         }
     };
@@ -225,13 +246,20 @@ pub(super) async fn commit_registration_token(
     .await
 }
 
-fn handle_token_source_error(inner: &RelayInner, state: &Arc<ListenerState>, error: Error) {
+async fn handle_token_source_error(inner: &RelayInner, state: &Arc<ListenerState>, error: Error) {
     if !state.was_returned() {
         inner.fail_initial_listener(state, error);
         return;
     }
-    state.set_status(ListenerStatus::Suspended, Some(error));
-    inner.schedule_reconcile();
+    state.finish_registration_attempt();
+    if error.is_retryable() {
+        state.set_status(ListenerStatus::Suspended, Some(error));
+        inner.schedule_reconcile();
+    } else {
+        state.block(error);
+        inner.mark_reconnect_degraded();
+        state.drain_unaccepted(true).await;
+    }
 }
 
 fn snapshot_desired_by_destination(

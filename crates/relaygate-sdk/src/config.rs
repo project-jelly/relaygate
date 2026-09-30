@@ -138,7 +138,8 @@ impl Config {
         }
     }
 
-    /// Sets the deadline for establishing the initial Gateway session.
+    /// Sets the total deadline for initial connection, including retries.
+    /// Managed reconnect uses the same limit for each connection attempt.
     #[must_use]
     pub const fn with_connect_timeout(mut self, value: Duration) -> Self {
         self.connect_timeout = value;
@@ -168,7 +169,7 @@ impl Config {
         self
     }
 
-    /// Sets the initial and maximum managed-reconnect delays.
+    /// Sets the initial and maximum reconnect and precommit retry delays.
     ///
     /// Configuration validation requires both values to be positive and the
     /// maximum to be at least the initial delay.
@@ -252,6 +253,10 @@ impl Config {
 
     pub(crate) fn operation_deadline(&self) -> Result<Instant> {
         deadline_from_now("operation_timeout", self.operation_timeout)
+    }
+
+    pub(crate) fn connect_deadline(&self) -> Result<Instant> {
+        deadline_from_now("connect_timeout", self.connect_timeout)
     }
 }
 

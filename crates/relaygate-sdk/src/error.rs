@@ -39,9 +39,9 @@ macro_rules! error_codes {
 error_codes! {
     /// An input or configuration value was invalid.
     InvalidArgument => "invalid_argument",
-    /// The supplied operation credential could not authenticate the caller.
+    /// Application token supply or the operation credential could not authenticate the caller.
     Unauthenticated => "unauthenticated",
-    /// The authenticated caller is not authorized for the operation.
+    /// Application token supply or operation permission was denied.
     PermissionDenied => "permission_denied",
     /// The requested destination or resource was not found.
     NotFound => "not_found",

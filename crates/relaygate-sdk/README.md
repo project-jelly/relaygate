@@ -43,6 +43,50 @@ let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 # let _ = tokens;
 ```
 
+Use `dynamic_with_errors` when the provider can distinguish failures:
+
+| `AccessTokenSourceFailure` | Provider condition | SDK behavior |
+| --- | --- | --- |
+| `Unavailable` | Temporary network/backend failure or rate limit | Retry with backoff |
+| `Unauthenticated` | Application authentication must be restored | Return error / block returned Listener |
+| `PermissionDenied` | Permission to obtain the operation token was denied | Return error / block returned Listener |
+
+```no_run
+use relaygate_sdk::{AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure};
+
+# async fn token_from_backend(_request: AccessTokenRequest) -> Result<AccessToken, AccessTokenSourceFailure> {
+#     Err(AccessTokenSourceFailure::Unavailable)
+# }
+// The backend adapter maps its errors to the three categories above.
+let tokens = AccessTokenSource::dynamic_with_errors(token_from_backend);
+# let _ = tokens;
+```
+
+Both callbacks may run concurrently for distinct operations. Map failures by
+backend semantics, not diagnostic text. Provider response bodies and credentials
+are not included in SDK errors. After repairing a permanent failure, close the
+blocked Listener and call `listen` with the replacement source. Sibling Listeners
+and the Relay remain usable.
+
+## Automatic recovery
+
+| Boundary | SDK behavior |
+| --- | --- |
+| Initial connection | Retry transient failures with backoff within one `connect_timeout`. |
+| Initial listen/dial token supply | Retry transient supplier failures within the original `operation_timeout`. |
+| Established session loss | Reconnect and republish returned Listeners using the existing managed backoff. |
+| Initial PUBLISH/DIAL result | Return the result; do not resend the wire operation automatically. |
+| Returned Listener republish | Retry transient supply/registration failures with the shared timer; permanent failures become `Blocked`. |
+| Gateway authentication/authorization rejection or uncertain operation | Return the error; do not replay. |
+| Established Pipe | Fail on session loss; never migrate or resend payloads. |
+
+`with_reconnect_backoff` also controls initial connection and token-supply retry
+spacing. The original deadline includes every attempt and wait. Dropping the
+call stops its retries; closing the Relay interrupts token supply and backoff.
+The legacy `AccessTokenSourceError` represents a transient supplier failure;
+callbacks may run more than once after failures. One successful token supply is
+reused by the same dial call. Token issuance and refresh policy remain application-owned.
+
 ## Handling errors
 
 Use `Error::code()` and `Error::origin()` for application decisions.
@@ -52,7 +96,9 @@ is diagnostic text, not a value to match. `PeerObservation` remains separate;
 
 | Origin and code | Application response |
 | --- | --- |
-| `TokenSource` + `Unavailable`/`DeadlineExceeded` | Restore the application token provider; a returned Listener retries publication. Close it if application policy permanently revoked the grant. |
+| `TokenSource` + `Unavailable`/`DeadlineExceeded` | Restore the application token provider; a returned Listener retries publication. |
+| `TokenSource` + `Unauthenticated` | Restore application authentication; the SDK does not retry. A returned Listener becomes `Blocked`. |
+| `TokenSource` + `PermissionDenied` | Restore permission for the requested action and Destination; the SDK does not retry. A returned Listener becomes `Blocked`. |
 | `Gateway` + `Unauthenticated` | Issue a valid operation JWT; check profile, key, claims, and expiry. |
 | `Gateway` + `PermissionDenied` | Check the token's action, Namespace, Destination scope, and permission count. |
 | `Gateway` + `Internal` | Check Gateway diagnostics; internal RouteTable/peer admission authentication failures cannot be repaired by refreshing an application JWT. |

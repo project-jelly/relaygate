@@ -22,7 +22,7 @@ use crate::{
     PeerObservation, Pipe, Result,
     lifetime::RuntimeLifetime,
     resource::RelayResources,
-    session::{ReconnectBackoff, establish},
+    session::{ReconnectBackoff, establish_initial},
 };
 
 /// Current state of the shared Relay session.
@@ -91,7 +91,7 @@ impl Relay {
     /// reconnection for every desired Listener handle.
     pub async fn connect(config: Config) -> Result<Self> {
         config.validate()?;
-        let established = establish(&config).await?;
+        let established = establish_initial(&config).await?;
         let (current, _) = watch::channel(None);
         let (status, _) = watch::channel(RelayStatus::Active);
         let cancel = CancellationToken::new();
@@ -266,15 +266,20 @@ impl Relay {
                 let access_token = match supplied_access_token.as_ref() {
                     Some(access_token) => access_token.clone(),
                     None => {
-                        let access_token = timeout_at(
-                            deadline,
-                            access_token_source.supply(AccessTokenRequest {
-                                action: AccessAction::Dial,
-                                destination: destination.clone(),
-                            }),
-                        )
-                        .await
-                        .map_err(|_| Error::token_source_deadline())??;
+                        let access_token = access_token_source
+                            .supply_with_retry(
+                                AccessTokenRequest {
+                                    action: AccessAction::Dial,
+                                    destination: destination.clone(),
+                                },
+                                deadline,
+                                ReconnectBackoff::new(
+                                    self.inner.config.reconnect_initial,
+                                    self.inner.config.reconnect_maximum,
+                                ),
+                                &self.inner.cancel,
+                            )
+                            .await?;
                         supplied_access_token = Some(access_token.clone());
                         access_token
                     }

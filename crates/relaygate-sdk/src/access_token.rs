@@ -1,6 +1,8 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use relaygate_protocol::{BearerToken, MAX_BEARER_TOKEN_BYTES};
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::{Destination, Error, ErrorCode, ErrorOrigin, PeerObservation};
 
@@ -69,14 +71,58 @@ pub struct AccessTokenRequest {
     pub destination: Destination,
 }
 
-/// Failure reported by an application-owned dynamic token source.
+/// Legacy transient failure reported by [`AccessTokenSource::dynamic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("access token source is unavailable")]
 pub struct AccessTokenSourceError;
 
+/// Classified failure reported by [`AccessTokenSource::dynamic_with_errors`].
+///
+/// Authentication and permission failures require application intervention;
+/// the SDK does not retry them. No provider response text or credentials are
+/// stored in these errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum AccessTokenSourceFailure {
+    /// Temporary network, backend, or rate-limit failure; retry with backoff.
+    #[error("application token source is temporarily unavailable")]
+    Unavailable,
+    /// The provider requires renewed application authentication.
+    #[error("application token source requires authentication")]
+    Unauthenticated,
+    /// The provider denied permission to obtain this operation token.
+    #[error("application token source denied permission")]
+    PermissionDenied,
+}
+
+impl AccessTokenSourceFailure {
+    fn into_sdk_error(self, action: AccessAction) -> Error {
+        let (code, detail) = match self {
+            Self::Unavailable => (
+                ErrorCode::Unavailable,
+                "is temporarily unavailable; retry after the application token provider recovers",
+            ),
+            Self::Unauthenticated => (
+                ErrorCode::Unauthenticated,
+                "requires authentication; restore application authentication before requesting a new token",
+            ),
+            Self::PermissionDenied => (
+                ErrorCode::PermissionDenied,
+                "denied permission; verify application permission for the requested action and Destination",
+            ),
+        };
+        Error::new(
+            code,
+            PeerObservation::NotObserved,
+            format!("application token source for {action:?} token {detail}"),
+        )
+        .with_origin(ErrorOrigin::TokenSource)
+    }
+}
+
 type AccessTokenFuture = Pin<
     Box<
-        dyn Future<Output = std::result::Result<AccessToken, AccessTokenSourceError>>
+        dyn Future<Output = std::result::Result<AccessToken, AccessTokenSourceFailure>>
             + Send
             + 'static,
     >,
@@ -109,10 +155,40 @@ impl AccessTokenSource {
     /// RelayGate does not issue or refresh application credentials. The
     /// callback should obtain a token from the application's backend and must
     /// not persist raw token material in RelayGate state.
+    /// All failures from this legacy callback are transient. Use
+    /// [`Self::dynamic_with_errors`] to distinguish authentication and permission
+    /// failures. Initial operations retry within their original deadline;
+    /// returned Listeners use managed republish backoff.
+    /// One successful supply is reused through the same dial call.
     pub fn dynamic<F, Fut>(callback: F) -> Self
     where
         F: Fn(AccessTokenRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = std::result::Result<AccessToken, AccessTokenSourceError>>
+            + Send
+            + 'static,
+    {
+        Self::dynamic_with_errors(move |request| {
+            let supplied = callback(request);
+            async move {
+                supplied
+                    .await
+                    .map_err(|_| AccessTokenSourceFailure::Unavailable)
+            }
+        })
+    }
+
+    /// Calls an application provider that classifies token-supply failures.
+    ///
+    /// [`AccessTokenSourceFailure::Unavailable`] is retried with backoff.
+    /// Authentication or permission failures end an initial listen/dial
+    /// immediately, or block a returned Listener until the application closes
+    /// it and creates a replacement after restoring authentication/permission.
+    /// The Relay and sibling Listeners remain usable. Tokens are requested again
+    /// on republish; issuance and refresh remain application-owned.
+    pub fn dynamic_with_errors<F, Fut>(callback: F) -> Self
+    where
+        F: Fn(AccessTokenRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = std::result::Result<AccessToken, AccessTokenSourceFailure>>
             + Send
             + 'static,
     {
@@ -125,16 +201,28 @@ impl AccessTokenSource {
         let action = request.action;
         let token = match &self.0 {
             AccessTokenSourceInner::Static(token) => token.clone(),
-            AccessTokenSourceInner::Dynamic(callback) => callback(request).await.map_err(|_| {
-                Error::new(
-                    ErrorCode::Unavailable,
-                    PeerObservation::NotObserved,
-                    format!("application token source failed to supply {action:?} token"),
-                )
-                .with_origin(ErrorOrigin::TokenSource)
-            })?,
+            AccessTokenSourceInner::Dynamic(callback) => callback(request)
+                .await
+                .map_err(|failure| failure.into_sdk_error(action))?,
         };
         Ok(token.0)
+    }
+
+    pub(crate) async fn supply_with_retry(
+        &self,
+        request: AccessTokenRequest,
+        deadline: Instant,
+        backoff: crate::session::ReconnectBackoff,
+        cancel: &CancellationToken,
+    ) -> Result<BearerToken, Error> {
+        crate::retry::retry_precommit(
+            deadline,
+            backoff,
+            cancel,
+            Error::token_source_deadline(),
+            || self.supply(request.clone()),
+        )
+        .await
     }
 }
 
@@ -180,6 +268,40 @@ mod tests {
         let token = AccessToken::new("must-not-appear")?;
         assert_eq!(format!("{token:?}"), "AccessToken([REDACTED])");
         Ok(())
+    }
+
+    #[test]
+    fn classified_token_failures_preserve_code_origin_and_action() {
+        for action in [AccessAction::Publish, AccessAction::Dial] {
+            for (failure, code, retryable, detail) in [
+                (
+                    AccessTokenSourceFailure::Unavailable,
+                    ErrorCode::Unavailable,
+                    true,
+                    "temporarily unavailable",
+                ),
+                (
+                    AccessTokenSourceFailure::Unauthenticated,
+                    ErrorCode::Unauthenticated,
+                    false,
+                    "restore application authentication",
+                ),
+                (
+                    AccessTokenSourceFailure::PermissionDenied,
+                    ErrorCode::PermissionDenied,
+                    false,
+                    "verify application permission",
+                ),
+            ] {
+                let error = failure.into_sdk_error(action);
+                assert_eq!(error.code(), code);
+                assert_eq!(error.origin(), ErrorOrigin::TokenSource);
+                assert_eq!(error.observation(), PeerObservation::NotObserved);
+                assert_eq!(error.is_retryable(), retryable);
+                assert!(error.message().contains(&format!("{action:?} token")));
+                assert!(error.message().contains(detail));
+            }
+        }
     }
 
     #[tokio::test]
