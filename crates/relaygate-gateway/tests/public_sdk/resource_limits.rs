@@ -9,7 +9,7 @@ use std::sync::{
 async fn listener_live_pipe_limit_rejects_only_the_excess_dial_and_recovers_after_cleanup()
 -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let publisher_config = Config::new_insecure_for_tests(address.to_string())
+    let publisher_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1))
         .with_resource_limits(
             ResourceLimits::default()
@@ -17,7 +17,7 @@ async fn listener_live_pipe_limit_rejects_only_the_excess_dial_and_recovers_afte
                 .with_max_live_pipes_per_listener(1)
                 .with_max_live_pipes_per_relay(2),
         );
-    let caller_config = Config::new_insecure_for_tests(address.to_string())
+    let caller_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
@@ -99,7 +99,7 @@ async fn listener_live_pipe_limit_rejects_only_the_excess_dial_and_recovers_afte
 async fn listener_pending_pipe_limit_recovers_after_application_accepts_the_queued_pipe()
 -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let publisher_config = Config::new_insecure_for_tests(address.to_string())
+    let publisher_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1))
         .with_resource_limits(
             ResourceLimits::default()
@@ -107,7 +107,7 @@ async fn listener_pending_pipe_limit_recovers_after_application_accepts_the_queu
                 .with_max_live_pipes_per_listener(2)
                 .with_max_live_pipes_per_relay(2),
         );
-    let caller_config = Config::new_insecure_for_tests(address.to_string())
+    let caller_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
@@ -164,7 +164,7 @@ async fn listener_pending_pipe_limit_recovers_after_application_accepts_the_queu
 #[tokio::test]
 async fn pipe_byte_limit_resets_only_the_overflowed_pipe_and_preserves_sibling() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let publisher_config = Config::new_insecure_for_tests(address.to_string())
+    let publisher_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1))
         .with_resource_limits(
             ResourceLimits::default()
@@ -175,7 +175,7 @@ async fn pipe_byte_limit_resets_only_the_overflowed_pipe_and_preserves_sibling()
                 .with_max_buffered_bytes_per_pipe(4)
                 .with_max_buffered_bytes_per_relay(8),
         );
-    let caller_config = Config::new_insecure_for_tests(address.to_string())
+    let caller_config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
@@ -260,9 +260,9 @@ async fn pipe_byte_limit_resets_only_the_overflowed_pipe_and_preserves_sibling()
 #[tokio::test]
 async fn local_dial_capacity_rejection_still_supplies_the_token_exactly_once() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let publisher = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+    let publisher = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
     let caller = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string()).with_resource_limits(
+        Config::new(format!("tcp://{address}"))?.with_resource_limits(
             ResourceLimits::default()
                 .with_max_live_pipes_per_listener(1)
                 .with_max_live_pipes_per_relay(1),

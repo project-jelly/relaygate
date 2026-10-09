@@ -33,7 +33,7 @@ async fn initial_admission_rejection_has_no_committed_operation() -> TestResult 
             Ok::<_, Box<dyn StdError + Send + Sync>>(())
         });
         let error =
-            match crate::session::establish(&Config::new_insecure_for_tests(address.to_string()))
+            match crate::session::establish(&Config::new(format!("tcp://{address}"))?)
                 .await
             {
                 Err(error) => error,
@@ -62,7 +62,7 @@ async fn publish_and_dial_token_deadlines_have_consistent_origin() -> TestResult
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_millis(25)),
     )
     .await?;
@@ -124,7 +124,7 @@ async fn heartbeat_failure_reaches_relay_and_pipe_without_replay() -> TestResult
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_heartbeat(Duration::from_millis(100), Duration::from_millis(30))
             .with_reconnect_backoff(Duration::from_secs(5), Duration::from_secs(5)),
     )
@@ -166,7 +166,7 @@ async fn session_wait_deadlines_are_transport_failures() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_millis(30))
             .with_reconnect_backoff(Duration::from_secs(5), Duration::from_secs(5)),
     )
@@ -266,7 +266,7 @@ async fn initial_connect_recovers_from_transient_admission_rejection() -> TestRe
     let relay = timeout(
         Duration::from_secs(2),
         Relay::connect(
-            Config::new_insecure_for_tests(address.to_string())
+            Config::new(format!("tcp://{address}"))?
                 .with_connect_timeout(Duration::from_secs(1))
                 .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(10)),
         ),
@@ -315,7 +315,7 @@ async fn token_supply_recovers_before_first_publish_and_dial() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_secs(2))
             .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(10)),
     )
@@ -361,7 +361,7 @@ async fn relay_close_cancels_pending_dial_token_supply() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_secs(30)),
     )
     .await?;
@@ -410,7 +410,7 @@ async fn cancelled_initial_listen_drops_token_supply() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_secs(30)),
     )
     .await?;

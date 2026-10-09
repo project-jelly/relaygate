@@ -5,7 +5,7 @@ mod runtime;
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use relaygate_gateway::{check, check_insecure_for_tests};
+use relaygate_gateway::{check, check_plaintext};
 use relaygate_transport::ClientTlsConfig;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         Command::CheckGateway { address } => {
             config::reject_removed_flags()?;
             if !config::sdk_tls_enabled()? {
-                check_insecure_for_tests(address, DEFAULT_CHECK_DEADLINE)
+                check_plaintext(address, DEFAULT_CHECK_DEADLINE)
                     .await
                     .context("Gateway SDK admission readiness check failed")
             } else {

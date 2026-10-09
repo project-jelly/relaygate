@@ -12,7 +12,7 @@ fn returned_listeners_republish_after_rate_limited_reconnect() -> TestResult {
     metrics::with_local_recorder(&recorder, || {
         runtime.block_on(async {
             let (address, first_shutdown, first_server) = start_gateway().await?;
-            let config = Config::new_insecure_for_tests(address.to_string())
+            let config = Config::new(format!("tcp://{address}"))?
                 .with_operation_timeout(Duration::from_secs(2))
                 .with_reconnect_backoff(Duration::from_millis(50), Duration::from_millis(100));
             let relay = Relay::connect(config.clone()).await?;
@@ -116,7 +116,7 @@ async fn control_throttle_returns_request_errors_preserves_pipe_and_recovers() -
     )
     .await?;
     let result: TestResult = async {
-        let config = Config::new_insecure_for_tests(address.to_string())
+        let config = Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_secs(2));
         let receiver = Relay::connect(config.clone()).await?;
         let caller = Relay::connect(config).await?;

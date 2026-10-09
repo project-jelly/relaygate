@@ -8,10 +8,6 @@ repository.workspace = true
 description = "Public Rust SDK for RelayGate Relay, Listener and Pipe sessions"
 readme = "README.md"
 
-[features]
-default = []
-insecure-test-transport = []
-
 [dependencies]
 bytes.workspace = true
 futures-util.workspace = true

@@ -78,7 +78,7 @@ async fn connect_timeout_covers_tls_and_welcome_together() -> TestResult {
 }
 
 fn heartbeat() -> SessionHeartbeat {
-    let config = Config::new_insecure_for_tests("127.0.0.1:0")
+    let config = Config::with_transport(crate::GatewayTransportConfig::insecure_tcp("127.0.0.1:0"))
         .with_heartbeat(Duration::from_secs(60), Duration::from_secs(20));
     SessionHeartbeat::new(&config, SessionId::new(), 0x43)
 }
@@ -220,7 +220,7 @@ async fn steady_state_data_frames_do_not_rescan_listener_settlement() -> TestRes
         Ok::<(), Box<dyn StdError + Send + Sync>>(())
     });
 
-    let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+    let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
     timeout(Duration::from_secs(1), async {
         while relay.desired_settlement_calls() == 0 {
             sleep(Duration::from_millis(1)).await;
@@ -257,7 +257,7 @@ async fn initial_unexpected_non_welcome_frame_returns_protocol_error() -> TestRe
         Ok::<(), Box<dyn StdError + Send + Sync>>(())
     });
 
-    let error = match Relay::connect(Config::new_insecure_for_tests(address.to_string())).await {
+    let error = match Relay::connect(Config::new(format!("tcp://{address}"))?).await {
         Ok(relay) => {
             relay.close();
             return Err("unexpected non-WELCOME frame established RelaySession".into());
@@ -301,7 +301,7 @@ async fn relay_status_snapshot_subscription_and_clones_share_state() -> TestResu
         Ok::<(), Box<dyn StdError + Send + Sync>>(())
     });
 
-    let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+    let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
     assert_eq!(relay.status(), RelayStatus::Active);
     let relay_clone = relay.clone();
     timeout(Duration::from_secs(1), relay.wait_ready()).await??;
@@ -379,7 +379,7 @@ async fn relay_status_reports_reconnecting_and_wait_ready_recovers() -> TestResu
     });
 
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
     )
     .await?;
@@ -478,7 +478,7 @@ async fn reconnect_error_is_visible_until_recovery() -> TestResult {
     });
 
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
     )
     .await?;
@@ -563,7 +563,7 @@ async fn relay_close_is_terminal_during_reconnect_handshake() -> TestResult {
     });
 
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
     )
     .await?;
@@ -698,7 +698,7 @@ async fn returned_listener_republishes_after_unexpected_runtime_frame() -> TestR
         Ok::<(), Box<dyn StdError + Send + Sync>>(())
     });
 
-    let config = Config::new_insecure_for_tests(address.to_string())
+    let config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(2))
         .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20));
     let relay = Relay::connect(config).await?;
@@ -864,7 +864,7 @@ fn permanent_republish_failure_settles_reconnect_episode_as_degraded() -> TestRe
                 });
 
                 let relay = Relay::connect(
-                    Config::new_insecure_for_tests(address.to_string())
+                    Config::new(format!("tcp://{address}"))?
                         .with_operation_timeout(Duration::from_secs(2))
                         .with_reconnect_backoff(
                             Duration::from_millis(10),
@@ -1025,7 +1025,7 @@ async fn dial_supplies_token_only_after_replacement_session_is_ready() -> TestRe
     });
 
     let relay = Relay::connect(
-        Config::new_insecure_for_tests(address.to_string())
+        Config::new(format!("tcp://{address}"))?
             .with_operation_timeout(Duration::from_secs(2))
             .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
     )

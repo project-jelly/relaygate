@@ -46,7 +46,7 @@ async fn wait_status(listener: &Listener, expected: ListenerStatus) -> TestResul
 
 fn config(socket: &TcpListener) -> TestResult<Config> {
     Ok(
-        Config::new_insecure_for_tests(socket.local_addr()?.to_string())
+        Config::new(format!("tcp://{}", socket.local_addr()?))?
             .with_operation_timeout(Duration::from_secs(2))
             .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(20)),
     )

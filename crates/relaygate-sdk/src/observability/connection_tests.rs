@@ -71,7 +71,7 @@ async fn hello(socket: &TcpListener) -> TestResult<Gateway> {
 
 fn config(socket: &TcpListener) -> TestResult<Config> {
     Ok(
-        Config::new_insecure_for_tests(socket.local_addr()?.to_string())
+        Config::new(format!("tcp://{}", socket.local_addr()?))?
             .with_connect_timeout(Duration::from_millis(100)),
     )
 }

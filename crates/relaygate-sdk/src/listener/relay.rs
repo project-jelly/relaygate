@@ -494,7 +494,7 @@ mod tests {
             Ok::<(), Box<dyn StdError + Send + Sync>>(())
         });
 
-        let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+        let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
         assert_eq!(relay.status(), RelayStatus::Active);
         assert!(relay.inner.current.borrow().is_some());
         timeout(Duration::from_secs(1), relay.wait_ready()).await??;
@@ -544,7 +544,7 @@ mod tests {
             Ok::<(), Box<dyn StdError + Send + Sync>>(())
         });
 
-        let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+        let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
         let destination: Destination = "test/duplicate-listener".parse()?;
         let first = relay
             .listen(
