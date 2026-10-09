@@ -150,7 +150,6 @@ impl AccessTokenSource {
     /// RelayGate does not issue or refresh application credentials. The
     /// callback should obtain a token from the application's backend and must
     /// not persist raw token material in RelayGate state.
-    /// One successful supply is reused through the same dial call.
     ///
     /// [`AccessTokenSourceFailure::Unavailable`] is retried with backoff:
     /// initial operations retry within their original deadline and returned
@@ -160,6 +159,7 @@ impl AccessTokenSource {
     /// restoring authentication/permission. The Relay and sibling Listeners
     /// remain usable. Tokens are requested again on republish; issuance and
     /// refresh remain application-owned.
+    /// One successful supply is reused through the same dial call.
     pub fn dynamic<F, Fut>(callback: F) -> Self
     where
         F: Fn(AccessTokenRequest) -> Fut + Send + Sync + 'static,
