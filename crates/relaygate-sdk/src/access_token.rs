@@ -71,12 +71,7 @@ pub struct AccessTokenRequest {
     pub destination: Destination,
 }
 
-/// Legacy transient failure reported by [`AccessTokenSource::dynamic`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("access token source is unavailable")]
-pub struct AccessTokenSourceError;
-
-/// Classified failure reported by [`AccessTokenSource::dynamic_with_errors`].
+/// Classified failure reported by [`AccessTokenSource::dynamic`].
 ///
 /// Authentication and permission failures require application intervention;
 /// the SDK does not retry them. No provider response text or credentials are
@@ -155,37 +150,17 @@ impl AccessTokenSource {
     /// RelayGate does not issue or refresh application credentials. The
     /// callback should obtain a token from the application's backend and must
     /// not persist raw token material in RelayGate state.
-    /// All failures from this legacy callback are transient. Use
-    /// [`Self::dynamic_with_errors`] to distinguish authentication and permission
-    /// failures. Initial operations retry within their original deadline;
-    /// returned Listeners use managed republish backoff.
+    ///
+    /// [`AccessTokenSourceFailure::Unavailable`] is retried with backoff:
+    /// initial operations retry within their original deadline and returned
+    /// Listeners use managed republish backoff. Authentication or permission
+    /// failures end an initial listen/dial immediately, or block a returned
+    /// Listener until the application closes it and creates a replacement after
+    /// restoring authentication/permission. The Relay and sibling Listeners
+    /// remain usable. Tokens are requested again on republish; issuance and
+    /// refresh remain application-owned.
     /// One successful supply is reused through the same dial call.
     pub fn dynamic<F, Fut>(callback: F) -> Self
-    where
-        F: Fn(AccessTokenRequest) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = std::result::Result<AccessToken, AccessTokenSourceError>>
-            + Send
-            + 'static,
-    {
-        Self::dynamic_with_errors(move |request| {
-            let supplied = callback(request);
-            async move {
-                supplied
-                    .await
-                    .map_err(|_| AccessTokenSourceFailure::Unavailable)
-            }
-        })
-    }
-
-    /// Calls an application provider that classifies token-supply failures.
-    ///
-    /// [`AccessTokenSourceFailure::Unavailable`] is retried with backoff.
-    /// Authentication or permission failures end an initial listen/dial
-    /// immediately, or block a returned Listener until the application closes
-    /// it and creates a replacement after restoring authentication/permission.
-    /// The Relay and sibling Listeners remain usable. Tokens are requested again
-    /// on republish; issuance and refresh remain application-owned.
-    pub fn dynamic_with_errors<F, Fut>(callback: F) -> Self
     where
         F: Fn(AccessTokenRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = std::result::Result<AccessToken, AccessTokenSourceFailure>>
@@ -315,7 +290,7 @@ mod tests {
             async move {
                 assert_eq!(request.destination, expected);
                 observed.fetch_add(1, Ordering::Relaxed);
-                AccessToken::new("grant").map_err(|_| AccessTokenSourceError)
+                AccessToken::new("grant").map_err(|_| AccessTokenSourceFailure::Unavailable)
             }
         });
         for action in [AccessAction::Publish, AccessAction::Dial] {
@@ -333,7 +308,8 @@ mod tests {
     #[tokio::test]
     async fn token_source_failure_identifies_application_dependency()
     -> Result<(), Box<dyn std::error::Error>> {
-        let source = AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceError) });
+        let source =
+            AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceFailure::Unavailable) });
         let result = source
             .supply(AccessTokenRequest {
                 action: AccessAction::Publish,

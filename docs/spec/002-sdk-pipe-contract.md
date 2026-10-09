@@ -77,7 +77,7 @@ async callback(action, Destination) -> PUBLISH 또는 DIAL
 | `SDK-025` | `SESSION_REJECTED`는 session 미수립인 `NOT_OBSERVED` 오류다. `UNAVAILABLE/RESOURCE_EXHAUSTED`는 backoff 뒤 새 연결을 허용한다. Committed DIAL의 불확실한 실패와 Pipe payload는 자동 재실행하지 않는다. |
 | `SDK-026` | Session 종료 원인의 code·origin·message는 Relay와 영향을 받는 Listener·Pipe·DIAL까지 보존한다. Observation은 각 operation의 commit 상태로 결정하며 Pipe I/O에서는 payload receipt가 아니다. |
 | `SDK-027` | 최초 연결과 initial PUBLISH/DIAL token 공급은 공통 precommit retry 처리로 기존 전체 deadline·backoff+jitter·cancel을 따른다. Returned Listener 재등록은 기존 Relay 공용 타이머를 사용한다. Gateway PUBLISH/DIAL 응답·불확실한 operation·Pipe payload는 이 retry 처리에 넣지 않는다. |
-| `SDK-028` | `dynamic_with_errors`의 `AccessTokenSourceFailure`는 `Unavailable`·`Unauthenticated`·`PermissionDenied`를 같은 SDK code와 `TokenSource/NOT_OBSERVED`로 전달한다. 일시 실패만 재시도한다. 인증·권한 실패는 initial listen/dial에서 즉시 반환하고 returned Listener는 `BLOCKED`로 전환한다. sibling Listener와 Relay는 유지하며 reconnect episode는 `degraded`로 기록한다. 기존 `dynamic`·`AccessTokenSourceError`는 일시 실패 의미를 유지한다. |
+| `SDK-028` | `dynamic`의 `AccessTokenSourceFailure`는 `Unavailable`·`Unauthenticated`·`PermissionDenied`를 같은 SDK code와 `TokenSource/NOT_OBSERVED`로 전달한다. 일시 실패만 재시도한다. 인증·권한 실패는 initial listen/dial에서 즉시 반환하고 returned Listener는 `BLOCKED`로 전환한다. sibling Listener와 Relay는 유지하며 reconnect episode는 `degraded`로 기록한다. |
 
 | 상황 | 결과 |
 | --- | --- |

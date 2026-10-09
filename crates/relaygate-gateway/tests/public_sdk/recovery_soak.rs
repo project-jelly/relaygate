@@ -1,6 +1,6 @@
 //! Opt-in, single-process TLS recovery soak; never extends ordinary CI runtime.
 use super::*;
-use relaygate_sdk::{AccessTokenSourceError, ErrorCode, ErrorOrigin, Pipe, RelayStatus};
+use relaygate_sdk::{AccessTokenSourceFailure, ErrorCode, ErrorOrigin, Pipe, RelayStatus};
 use std::{net::SocketAddr, time::Instant};
 use tokio::task::JoinHandle;
 
@@ -122,7 +122,7 @@ async fn tls_recovery_soak() -> TestResult {
     let source = AccessTokenSource::dynamic(move |_| {
         std::future::ready(
             access_token(&token_destination, AccessAction::Publish)
-                .map_err(|_| AccessTokenSourceError),
+                .map_err(|_| AccessTokenSourceFailure::Unavailable),
         )
     });
     let listener = publisher.listen(destination.clone(), source).await?;

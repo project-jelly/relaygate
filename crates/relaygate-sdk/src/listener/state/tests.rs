@@ -56,7 +56,7 @@ fn precommit_session_end_keeps_initial_listener_retryable_with_original_deadline
 
 #[test]
 fn cancelled_relay_status_transition_closes_instead_of_resurrecting() {
-    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let config = Config::with_transport(crate::GatewayTransportConfig::insecure_tcp("127.0.0.1:1"));
     let limits = config.resource_limits;
     let (current, _) = watch::channel::<Option<Arc<RelaySession>>>(None);
     let (status, _) = watch::channel(RelayStatus::Active);
@@ -93,8 +93,7 @@ fn cancelled_relay_status_transition_closes_instead_of_resurrecting() {
 async fn repeated_republish_failures_share_one_bounded_retry_timer() -> TestResult {
     let initial = Duration::from_secs(10);
     let maximum = Duration::from_secs(40);
-    let config =
-        Config::new_insecure_for_tests("127.0.0.1:1").with_reconnect_backoff(initial, maximum);
+    let config = Config::new("tcp://127.0.0.1:1")?.with_reconnect_backoff(initial, maximum);
     let limits = config.resource_limits;
     let (current, _) = watch::channel::<Option<Arc<RelaySession>>>(None);
     let (status, _) = watch::channel(RelayStatus::Reconnecting);
@@ -197,7 +196,7 @@ fn closed_listener_status_is_terminal() -> TestResult {
 
 #[test]
 fn reconnect_settlement_ignores_initial_listens_that_were_never_returned() -> TestResult {
-    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let config = Config::new("tcp://127.0.0.1:1")?;
     let limits = config.resource_limits;
     let listener = |name: &str, status: ListenerStatus, lifecycle: ListenerLifecycle| {
         let (status, _) = watch::channel(status);

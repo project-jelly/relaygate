@@ -1,8 +1,7 @@
 use std::{error::Error, io, net::SocketAddr, time::Duration};
 
 use relaygate_gateway::{
-    Gateway, GatewayConfig, GatewayError, GatewayPeerConfig, GatewayRoutingConfig,
-    check_insecure_for_tests,
+    Gateway, GatewayConfig, GatewayError, GatewayPeerConfig, GatewayRoutingConfig, check_plaintext,
 };
 use relaygate_route_table::{
     GatewayId, GatewayLocator, RouteTableConfig, RouteTableShard, ShardDirectory, ShardId,
@@ -55,9 +54,9 @@ async fn three_gateway_case() -> TestResult {
     let mut gateway_b = RunningGateway::start(GATEWAY_B, directory.clone()).await?;
     let mut gateway_c = RunningGateway::start(GATEWAY_C, directory.clone()).await?;
 
-    let listener_runtime_a = Relay::connect(sdk_config(gateway_a.sdk_address)).await?;
-    let listener_runtime_b = Relay::connect(sdk_config(gateway_b.sdk_address)).await?;
-    let listener_runtime_c = Relay::connect(sdk_config(gateway_c.sdk_address)).await?;
+    let listener_runtime_a = Relay::connect(sdk_config(gateway_a.sdk_address)?).await?;
+    let listener_runtime_b = Relay::connect(sdk_config(gateway_b.sdk_address)?).await?;
+    let listener_runtime_c = Relay::connect(sdk_config(gateway_c.sdk_address)?).await?;
     let listener_a = listen(&listener_runtime_a, DESTINATION_A).await?;
     let listener_b = listen(&listener_runtime_b, DESTINATION_B).await?;
     let listener_c = listen(&listener_runtime_c, DESTINATION_C).await?;
@@ -90,9 +89,9 @@ async fn three_gateway_case() -> TestResult {
     )
     .await?;
 
-    let dialer_a = Relay::connect(sdk_config(gateway_a.sdk_address)).await?;
-    let dialer_b = Relay::connect(sdk_config(gateway_b.sdk_address)).await?;
-    let dialer_c = Relay::connect(sdk_config(gateway_c.sdk_address)).await?;
+    let dialer_a = Relay::connect(sdk_config(gateway_a.sdk_address)?).await?;
+    let dialer_b = Relay::connect(sdk_config(gateway_b.sdk_address)?).await?;
+    let dialer_c = Relay::connect(sdk_config(gateway_c.sdk_address)?).await?;
 
     exercise_pipe(&dialer_a, DESTINATION_A, &listener_a, "local-a").await?;
     exercise_pipe(&dialer_b, DESTINATION_B, &listener_b, "local-b").await?;
@@ -475,7 +474,7 @@ impl RunningGateway {
                 .serve_distributed(sdk_listener, peer_listener, serve_shutdown)
                 .await
         });
-        check_insecure_for_tests(sdk_address, Duration::from_secs(1)).await?;
+        check_plaintext(sdk_address, Duration::from_secs(1)).await?;
         Ok(Self {
             name: name.to_owned(),
             sdk_address,
@@ -561,11 +560,11 @@ fn route_client_config() -> Result<RouteTableClientConfig, TransportError> {
     )
 }
 
-fn sdk_config(endpoint: SocketAddr) -> SdkConfig {
-    SdkConfig::new_insecure_for_tests(endpoint.to_string())
+fn sdk_config(endpoint: SocketAddr) -> TestResult<SdkConfig> {
+    Ok(SdkConfig::new(format!("tcp://{endpoint}"))?
         .with_connect_timeout(Duration::from_millis(200))
         .with_operation_timeout(Duration::from_secs(2))
-        .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(40))
+        .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(40)))
 }
 
 async fn wait_for_binding_count(

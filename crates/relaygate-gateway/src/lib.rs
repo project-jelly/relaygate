@@ -26,7 +26,7 @@ pub use config::{
     MAX_AUTHORIZATION_CONCURRENCY, MAX_AUTHORIZATION_TIMEOUT,
 };
 pub use error::GatewayError;
-pub use gateway::{Gateway, check, check_insecure_for_tests};
+pub use gateway::{Gateway, check, check_plaintext};
 pub use observation::{GatewaySnapshot, RouteDependencyHealth};
 pub use peer::GatewayPeerConfig;
 pub use routing::GatewayRoutingConfig;

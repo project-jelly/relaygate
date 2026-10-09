@@ -342,8 +342,9 @@ pub async fn check(
     .map_err(|_| GatewayError::AdmissionCheckTimeout)?
 }
 
-#[doc(hidden)]
-pub async fn check_insecure_for_tests(
+/// Same readiness probe as [`check`] for an explicitly plaintext SDK
+/// listener (`RELAYGATE_SDK_TRANSPORT=plaintext`).
+pub async fn check_plaintext(
     address: impl ToSocketAddrs,
     deadline: Duration,
 ) -> Result<(), GatewayError> {
@@ -367,7 +368,7 @@ async fn probe_admission(io: BoxedIo) -> Result<(), GatewayError> {
 
 #[cfg(test)]
 mod tests {
-    use super::check_insecure_for_tests;
+    use super::check_plaintext;
     use futures_util::{SinkExt, StreamExt};
     use relaygate_protocol::{Destination, Frame, FrameCodec};
     use tokio::{
@@ -441,7 +442,7 @@ mod tests {
         assert!(gateway.snapshot().draining);
         assert!(!serving.is_finished());
         assert!(
-            check_insecure_for_tests(address, Duration::from_millis(50))
+            check_plaintext(address, Duration::from_millis(50))
                 .await
                 .is_err()
         );

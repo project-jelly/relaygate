@@ -117,13 +117,6 @@ impl Config {
         Self::new_with_transport(transport)
     }
 
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "insecure-test-transport"))]
-    #[must_use]
-    pub fn new_insecure_for_tests(gateway_addr: impl Into<String>) -> Self {
-        Self::new_with_transport(GatewayTransportConfig::insecure_tcp(gateway_addr))
-    }
-
     fn new_with_transport(transport: GatewayTransportConfig) -> Self {
         Self {
             transport,
@@ -295,8 +288,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resource_limits_are_positive_and_hierarchically_ordered() {
-        let valid = Config::new_insecure_for_tests("127.0.0.1:1");
+    fn resource_limits_are_positive_and_hierarchically_ordered() -> Result<()> {
+        let valid = Config::new("tcp://127.0.0.1:1")?;
         assert!(valid.validate().is_ok());
 
         let zero = valid
@@ -317,11 +310,12 @@ mod tests {
             ResourceLimits::default().with_max_buffered_frames_per_pipe(Semaphore::MAX_PERMITS + 1),
         ] {
             assert!(
-                Config::new_insecure_for_tests("127.0.0.1:1")
+                Config::new("tcp://127.0.0.1:1")?
                     .with_resource_limits(limits)
                     .validate()
                     .is_err()
             );
         }
+        Ok(())
     }
 }

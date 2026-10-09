@@ -94,7 +94,7 @@ async fn sdk_gateway_path_uses_tls_before_operation_authorization() -> TestResul
 #[tokio::test]
 async fn one_session_can_listen_dial_and_accept() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let config = Config::new_insecure_for_tests(address.to_string())
+    let config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(1))
         .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(50));
     let relay_a = Relay::connect(config.clone()).await?;
@@ -153,8 +153,8 @@ async fn one_session_can_listen_dial_and_accept() -> TestResult {
 #[tokio::test]
 async fn session_frame_buffers_grow_beyond_their_initial_capacity() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let config = Config::new_insecure_for_tests(address.to_string())
-        .with_operation_timeout(Duration::from_secs(2));
+    let config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(2));
     let publisher = Relay::connect(config.clone()).await?;
     let caller = Relay::connect(config).await?;
     let destination = unique_destination()?;
@@ -199,8 +199,8 @@ async fn session_frame_buffers_grow_beyond_their_initial_capacity() -> TestResul
 #[tokio::test]
 async fn same_destination_selects_one_of_multiple_relays() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let config = Config::new_insecure_for_tests(address.to_string())
-        .with_operation_timeout(Duration::from_secs(1));
+    let config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(1));
     let first = Relay::connect(config.clone()).await?;
     let second = Relay::connect(config.clone()).await?;
     let caller = Relay::connect(config).await?;
@@ -251,7 +251,7 @@ async fn same_destination_selects_one_of_multiple_relays() -> TestResult {
 #[tokio::test]
 async fn operation_denial_does_not_end_the_relay_session() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+    let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
     let denied_address = unique_destination()?;
     let rejected = relay
         .listen(
@@ -290,7 +290,7 @@ async fn operation_denial_does_not_end_the_relay_session() -> TestResult {
 #[tokio::test]
 async fn relay_cannot_dial_its_own_only_binding() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let relay = Relay::connect(Config::new_insecure_for_tests(address.to_string())).await?;
+    let relay = Relay::connect(Config::new(format!("tcp://{address}"))?).await?;
     let destination = unique_destination()?;
     let _listener = relay
         .listen(
@@ -327,7 +327,7 @@ async fn relay_reconnects_republishes_and_replaces_ended_pipes() -> TestResult {
     let first_server =
         tokio::spawn(async move { first_gateway.serve(listener, serve_shutdown).await });
 
-    let config = Config::new_insecure_for_tests(address.to_string())
+    let config = Config::new(format!("tcp://{address}"))?
         .with_operation_timeout(Duration::from_secs(2))
         .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(50));
     let publisher = Relay::connect(config.clone()).await?;

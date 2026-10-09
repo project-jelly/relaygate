@@ -31,7 +31,7 @@ tokio = { workspace = true, features = ["test-util"] }
 metrics-util.workspace = true
 rcgen = "0.14"
 relaygate-route-table-transport.workspace = true
-relaygate-sdk = { workspace = true, features = ["insecure-test-transport"] }
+relaygate-sdk.workspace = true
 relaygate-token-issuer.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

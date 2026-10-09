@@ -37,7 +37,7 @@ mod transition;
 use connection_rate::ConnectionRateLimit;
 use distributed::DistributedRuntime;
 use effects::ControlEffects;
-pub use sdk_server::{check, check_insecure_for_tests};
+pub use sdk_server::{check, check_plaintext};
 
 #[derive(Clone)]
 pub struct Gateway {

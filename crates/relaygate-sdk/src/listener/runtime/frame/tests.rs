@@ -35,7 +35,7 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 #[tokio::test(start_paused = true)]
 async fn full_listener_queue_rejects_offer_immediately_and_preserves_session_frames() -> TestResult
 {
-    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let config = Config::new("tcp://127.0.0.1:1")?;
     let limits = config.resource_limits;
     let destination: Destination = "inference/stt.seoul".parse()?;
     let (incoming_tx, incoming_rx) = mpsc::channel(1);
@@ -158,7 +158,7 @@ async fn full_listener_queue_rejects_offer_immediately_and_preserves_session_fra
 
 #[tokio::test(start_paused = true)]
 async fn dropped_pipe_keeps_its_entry_until_close_is_sent() -> TestResult {
-    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let config = Config::new("tcp://127.0.0.1:1")?;
     let limits = config.resource_limits;
     let (current, _) = watch::channel(None);
     let (relay_status, _) = watch::channel(RelayStatus::Active);
@@ -235,7 +235,7 @@ async fn dropped_pipe_keeps_its_entry_until_close_is_sent() -> TestResult {
 
 #[test]
 fn published_response_keeps_commit_visible_until_activation() -> TestResult {
-    let config = Config::new_insecure_for_tests("127.0.0.1:1");
+    let config = Config::new("tcp://127.0.0.1:1")?;
     let limits = config.resource_limits;
     let destination: Destination = "inference/stt.seoul".parse()?;
     let (incoming_tx, incoming_rx) = mpsc::channel(1);
