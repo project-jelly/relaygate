@@ -1,8 +1,7 @@
 use std::{error::Error, io, net::SocketAddr, time::Duration};
 
 use relaygate_gateway::{
-    Gateway, GatewayConfig, GatewayError, GatewayPeerConfig, GatewayRoutingConfig,
-    check_plaintext,
+    Gateway, GatewayConfig, GatewayError, GatewayPeerConfig, GatewayRoutingConfig, check_plaintext,
 };
 use relaygate_route_table::{
     GatewayId, GatewayLocator, RouteTableConfig, RouteTableShard, ShardDirectory, ShardId,

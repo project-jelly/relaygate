@@ -3,9 +3,8 @@ use std::time::Duration;
 use relaygate_destination::{Destination, DestinationName, Namespace};
 use relaygate_protocol::{BearerToken, FrameCodec, MAX_BEARER_TOKEN_BYTES};
 use relaygate_sdk::{
-    AccessAction, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
-    AccessTokenSourceFailure, Config, Error, ErrorOrigin, Listener, ListenerStatus, Relay,
-    RelayStatus, ResourceLimits,
+    AccessAction, AccessTokenRequest, AccessTokenSource, AccessTokenSourceFailure, Config, Error,
+    ErrorOrigin, Listener, ListenerStatus, Relay, RelayStatus, ResourceLimits,
 };
 use relaygate_token_issuer::{Action, Permission, TokenIssuer};
 use relaygate_transport::{ClientTlsConfig, ServerTlsConfig, TlsErrorKind};
@@ -20,10 +19,8 @@ pub fn public_api_smoke() -> Result<(), Box<dyn std::error::Error>> {
         action: AccessAction::Dial,
         destination: destination.clone(),
     };
-    let _source = AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceError) });
-    let _classified_source = AccessTokenSource::dynamic_with_errors(|_| async {
-        Err(AccessTokenSourceFailure::Unauthenticated)
-    });
+    let _source =
+        AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceFailure::Unauthenticated) });
     let _: fn(&Error) -> ErrorOrigin = Error::origin;
     let io = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
     assert!(Error::from_io(&io).is_none());

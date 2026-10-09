@@ -67,7 +67,7 @@ handshake 직후 HELLO/WELCOME I/O에 도착한 certificate alert도 동일하�
 `last_error()`로 원인을 노출합니다. 서버 인증서 복구 시 기존 trust로 검증한 뒤 재연결·Listener republish를 수행합니다.
 SDK trust/client identity 변경은 새 Config와 Relay를 요구하며 자동 reload하지 않습니다.
 Gateway의 initial PUBLISH/DIAL 실패 응답은 기존대로 caller에 반환합니다.
-`dynamic_with_errors`의 인증·권한 실패는 재시도하지 않습니다. 기존 `dynamic`의 실패는 일시 실패로 유지합니다.
+`dynamic`의 인증·권한 실패는 재시도하지 않습니다.
 TokenSource 메시지는 action과 조치 안내만 포함하며 backend 응답·credential을 복사하지 않습니다.
 
 Session 종료 원인은 Relay `RECONNECTING` 통지 전 기록하고 영향을 받는 작업에도 전달합니다. 자동 reconnect와

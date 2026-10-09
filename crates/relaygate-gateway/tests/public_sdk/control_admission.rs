@@ -116,8 +116,8 @@ async fn control_throttle_returns_request_errors_preserves_pipe_and_recovers() -
     )
     .await?;
     let result: TestResult = async {
-        let config = Config::new(format!("tcp://{address}"))?
-            .with_operation_timeout(Duration::from_secs(2));
+        let config =
+            Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(2));
         let receiver = Relay::connect(config.clone()).await?;
         let caller = Relay::connect(config).await?;
         let destination = unique_destination()?;

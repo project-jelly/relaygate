@@ -70,10 +70,8 @@ async fn hello(socket: &TcpListener) -> TestResult<Gateway> {
 }
 
 fn config(socket: &TcpListener) -> TestResult<Config> {
-    Ok(
-        Config::new(format!("tcp://{}", socket.local_addr()?))?
-            .with_connect_timeout(Duration::from_millis(100)),
-    )
+    Ok(Config::new(format!("tcp://{}", socket.local_addr()?))?
+        .with_connect_timeout(Duration::from_millis(100)))
 }
 
 #[test]

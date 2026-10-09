@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AccessTokenSourceError, Error};
+use crate::{AccessTokenSourceFailure, Error};
 use tokio::{io::AsyncReadExt, net::TcpStream};
 
 async fn welcome(socket: &TcpListener) -> TestResult<(Framed<TcpStream, FrameCodec>, SessionId)> {
@@ -32,13 +32,11 @@ async fn initial_admission_rejection_has_no_committed_operation() -> TestResult 
                 .await?;
             Ok::<_, Box<dyn StdError + Send + Sync>>(())
         });
-        let error =
-            match crate::session::establish(&Config::new(format!("tcp://{address}"))?)
-                .await
-            {
-                Err(error) => error,
-                Ok(_) => return Err("rejected connection succeeded".into()),
-            };
+        let error = match crate::session::establish(&Config::new(format!("tcp://{address}"))?).await
+        {
+            Err(error) => error,
+            Ok(_) => return Err("rejected connection succeeded".into()),
+        };
         assert_eq!(error.origin(), ErrorOrigin::Gateway);
         assert_eq!(error.observation(), PeerObservation::NotObserved);
         assert_eq!(error.is_retryable(), retryable);
@@ -62,14 +60,13 @@ async fn publish_and_dial_token_deadlines_have_consistent_origin() -> TestResult
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new(format!("tcp://{address}"))?
-            .with_operation_timeout(Duration::from_millis(25)),
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_millis(25)),
     )
     .await?;
     // Exercise both the outer listen deadline and the token future's deadline.
     for attempt in 0..8 {
         let pending_source = AccessTokenSource::dynamic(|_| {
-            std::future::pending::<Result<AccessToken, AccessTokenSourceError>>()
+            std::future::pending::<Result<AccessToken, AccessTokenSourceFailure>>()
         });
         let error = match relay
             .listen(format!("test/deadline{attempt}").parse()?, pending_source)
@@ -86,7 +83,7 @@ async fn publish_and_dial_token_deadlines_have_consistent_origin() -> TestResult
         .dial(
             "test/dial".parse()?,
             AccessTokenSource::dynamic(|_| {
-                std::future::pending::<Result<AccessToken, AccessTokenSourceError>>()
+                std::future::pending::<Result<AccessToken, AccessTokenSourceFailure>>()
             }),
         )
         .await
@@ -326,9 +323,9 @@ async fn token_supply_recovers_before_first_publish_and_dial() -> TestResult {
         let call = observed.fetch_add(1, Ordering::SeqCst);
         async move {
             if call % 3 != 2 {
-                Err(AccessTokenSourceError)
+                Err(AccessTokenSourceFailure::Unavailable)
             } else {
-                AccessToken::new("grant").map_err(|_| AccessTokenSourceError)
+                AccessToken::new("grant").map_err(|_| AccessTokenSourceFailure::Unavailable)
             }
         }
     });
@@ -361,14 +358,13 @@ async fn relay_close_cancels_pending_dial_token_supply() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new(format!("tcp://{address}"))?
-            .with_operation_timeout(Duration::from_secs(30)),
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(30)),
     )
     .await?;
     let (supplied, mut supply_started) = tokio::sync::mpsc::unbounded_channel();
     let source = AccessTokenSource::dynamic(move |_| {
         let _ = supplied.send(());
-        std::future::pending::<Result<AccessToken, AccessTokenSourceError>>()
+        std::future::pending::<Result<AccessToken, AccessTokenSourceFailure>>()
     });
     let dial_relay = relay.clone();
     let dial = tokio::spawn(async move {
@@ -410,8 +406,7 @@ async fn cancelled_initial_listen_drops_token_supply() -> TestResult {
         Ok::<_, Box<dyn StdError + Send + Sync>>(())
     });
     let relay = Relay::connect(
-        Config::new(format!("tcp://{address}"))?
-            .with_operation_timeout(Duration::from_secs(30)),
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(30)),
     )
     .await?;
     let (started, mut supply_started) = tokio::sync::mpsc::unbounded_channel();
@@ -422,7 +417,7 @@ async fn cancelled_initial_listen_drops_token_supply() -> TestResult {
         async move {
             let _guard = SupplyGuard(dropped);
             let _ = started.send(());
-            std::future::pending::<Result<AccessToken, AccessTokenSourceError>>().await
+            std::future::pending::<Result<AccessToken, AccessTokenSourceFailure>>().await
         }
     });
     let listen_relay = relay.clone();

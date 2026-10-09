@@ -45,11 +45,9 @@ async fn wait_status(listener: &Listener, expected: ListenerStatus) -> TestResul
 }
 
 fn config(socket: &TcpListener) -> TestResult<Config> {
-    Ok(
-        Config::new(format!("tcp://{}", socket.local_addr()?))?
-            .with_operation_timeout(Duration::from_secs(2))
-            .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(20)),
-    )
+    Ok(Config::new(format!("tcp://{}", socket.local_addr()?))?
+        .with_operation_timeout(Duration::from_secs(2))
+        .with_reconnect_backoff(Duration::from_millis(5), Duration::from_millis(20)))
 }
 
 #[tokio::test]
@@ -74,7 +72,7 @@ async fn permanent_token_failures_end_initial_operations_without_wire_commit() -
             for action in [AccessAction::Publish, AccessAction::Dial] {
                 let calls = Arc::new(AtomicUsize::new(0));
                 let observed = Arc::clone(&calls);
-                let source = AccessTokenSource::dynamic_with_errors(move |request| {
+                let source = AccessTokenSource::dynamic(move |request| {
                     assert_eq!(request.action, action);
                     observed.fetch_add(1, Ordering::SeqCst);
                     async move { Err(failure) }
@@ -119,7 +117,7 @@ async fn classified_transient_token_failure_recovers_initial_and_returned_listen
         let mut gateway = gateway?;
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&calls);
-        let source = AccessTokenSource::dynamic_with_errors(move |_| {
+        let source = AccessTokenSource::dynamic(move |_| {
             let attempt = observed.fetch_add(1, Ordering::SeqCst);
             async move {
                 if attempt % 3 != 2 {
@@ -159,7 +157,7 @@ async fn permanent_republish_failure(
     let mut gateway = gateway?;
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let source = AccessTokenSource::dynamic_with_errors(move |_| {
+    let source = AccessTokenSource::dynamic(move |_| {
         let attempt = observed.fetch_add(1, Ordering::SeqCst);
         async move {
             if attempt > 0 {

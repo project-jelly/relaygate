@@ -1041,7 +1041,8 @@ async fn dial_supplies_token_only_after_replacement_session_is_ready() -> TestRe
         let observed_supplies = Arc::clone(&observed_supplies);
         async move {
             observed_supplies.fetch_add(1, Ordering::SeqCst);
-            AccessToken::new("fresh-grant").map_err(|_| crate::AccessTokenSourceError)
+            AccessToken::new("fresh-grant")
+                .map_err(|_| crate::AccessTokenSourceFailure::Unavailable)
         }
     });
     let dial_relay = relay.clone();

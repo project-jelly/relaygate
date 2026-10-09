@@ -93,8 +93,7 @@ fn cancelled_relay_status_transition_closes_instead_of_resurrecting() {
 async fn repeated_republish_failures_share_one_bounded_retry_timer() -> TestResult {
     let initial = Duration::from_secs(10);
     let maximum = Duration::from_secs(40);
-    let config =
-        Config::new("tcp://127.0.0.1:1")?.with_reconnect_backoff(initial, maximum);
+    let config = Config::new("tcp://127.0.0.1:1")?.with_reconnect_backoff(initial, maximum);
     let limits = config.resource_limits;
     let (current, _) = watch::channel::<Option<Arc<RelaySession>>>(None);
     let (status, _) = watch::channel(RelayStatus::Reconnecting);

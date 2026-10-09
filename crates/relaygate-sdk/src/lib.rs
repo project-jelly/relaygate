@@ -15,7 +15,7 @@ mod transport;
 
 pub use access_token::{
     AccessAction, AccessToken, AccessTokenError, AccessTokenRequest, AccessTokenSource,
-    AccessTokenSourceError, AccessTokenSourceFailure,
+    AccessTokenSourceFailure,
 };
 pub use config::{Config, ResourceLimits};
 pub use error::{Error, ErrorCode, ErrorOrigin, PeerObservation, Result};

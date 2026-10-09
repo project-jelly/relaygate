@@ -33,7 +33,7 @@ a new Config and Relay; certificate files are not automatically reloaded.
 
 Every `listen` and `dial` supplies an application-issued operation token.
 RelayGate does not issue, refresh, or persist these credentials. Production
-applications should use `AccessTokenSource::dynamic_with_errors` to fetch short-lived token
+applications should use `AccessTokenSource::dynamic` to fetch short-lived token
 material from their own backend. The helper below uses an environment variable
 only as a compileable stand-in for that backend boundary; do not hard-code raw
 tokens in source.
@@ -52,7 +52,7 @@ async fn token_from_application_backend(
     AccessToken::new(raw).map_err(|_| AccessTokenSourceFailure::Unauthenticated)
 }
 
-let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 # let _ = tokens;
 ```
 
@@ -64,11 +64,7 @@ The backend adapter classifies failures by their meaning:
 | `Unauthenticated` | Application authentication must be restored | Return error / block returned Listener |
 | `PermissionDenied` | Permission to obtain the operation token was denied | Return error / block returned Listener |
 
-Existing `AccessTokenSource::dynamic` callbacks remain supported. Their
-`AccessTokenSourceError` always means a transient failure; use
-`dynamic_with_errors` to stop retrying authentication or permission failures.
-
-Both callbacks may run concurrently for distinct operations. Map failures by
+Callbacks may run concurrently for distinct operations. Map failures by
 backend semantics, not diagnostic text. Provider response bodies and credentials
 are not included in SDK errors. After repairing a permanent failure, close the
 blocked Listener and call `listen` with the replacement source. Sibling Listeners
@@ -89,8 +85,7 @@ and the Relay remain usable.
 `with_reconnect_backoff` also controls initial connection and token-supply retry
 spacing. The original deadline includes every attempt and wait. Dropping the
 call stops its retries; closing the Relay interrupts token supply and backoff.
-The legacy `AccessTokenSourceError` represents a transient supplier failure;
-callbacks may run more than once after failures. One successful token supply is
+Callbacks may run more than once after `Unavailable` failures. One successful token supply is
 reused by the same dial call. Token issuance and refresh policy remain application-owned.
 
 ## Handling errors
@@ -194,7 +189,7 @@ let relay_observer = tokio::spawn(async move {
 });
 
 let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 let listener = Arc::new(relay.listen(destination, tokens).await?);
 let observed_listener = Arc::clone(&listener);
 let mut listener_status = listener.subscribe_status();
@@ -263,7 +258,7 @@ let observer = tokio::spawn(async move {
 });
 
 let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic_with_errors(token_from_application_backend);
+let tokens = AccessTokenSource::dynamic(token_from_application_backend);
 let mut pipe = relay.dial(destination, tokens).await?;
 pipe.write_all(b"transcribe this audio").await?;
 pipe.shutdown_write().await?;

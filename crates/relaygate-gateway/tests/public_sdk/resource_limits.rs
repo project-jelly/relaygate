@@ -17,8 +17,8 @@ async fn listener_live_pipe_limit_rejects_only_the_excess_dial_and_recovers_afte
                 .with_max_live_pipes_per_listener(1)
                 .with_max_live_pipes_per_relay(2),
         );
-    let caller_config = Config::new(format!("tcp://{address}"))?
-        .with_operation_timeout(Duration::from_secs(1));
+    let caller_config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
     let destination = unique_destination()?;
@@ -107,8 +107,8 @@ async fn listener_pending_pipe_limit_recovers_after_application_accepts_the_queu
                 .with_max_live_pipes_per_listener(2)
                 .with_max_live_pipes_per_relay(2),
         );
-    let caller_config = Config::new(format!("tcp://{address}"))?
-        .with_operation_timeout(Duration::from_secs(1));
+    let caller_config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
     let destination = unique_destination()?;
@@ -175,8 +175,8 @@ async fn pipe_byte_limit_resets_only_the_overflowed_pipe_and_preserves_sibling()
                 .with_max_buffered_bytes_per_pipe(4)
                 .with_max_buffered_bytes_per_relay(8),
         );
-    let caller_config = Config::new(format!("tcp://{address}"))?
-        .with_operation_timeout(Duration::from_secs(1));
+    let caller_config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(1));
     let publisher = Relay::connect(publisher_config).await?;
     let caller = Relay::connect(caller_config).await?;
     let destination = unique_destination()?;

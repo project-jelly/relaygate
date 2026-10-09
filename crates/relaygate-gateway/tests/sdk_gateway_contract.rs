@@ -153,8 +153,8 @@ async fn one_session_can_listen_dial_and_accept() -> TestResult {
 #[tokio::test]
 async fn session_frame_buffers_grow_beyond_their_initial_capacity() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let config = Config::new(format!("tcp://{address}"))?
-        .with_operation_timeout(Duration::from_secs(2));
+    let config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(2));
     let publisher = Relay::connect(config.clone()).await?;
     let caller = Relay::connect(config).await?;
     let destination = unique_destination()?;
@@ -199,8 +199,8 @@ async fn session_frame_buffers_grow_beyond_their_initial_capacity() -> TestResul
 #[tokio::test]
 async fn same_destination_selects_one_of_multiple_relays() -> TestResult {
     let (address, shutdown, server) = start_gateway().await?;
-    let config = Config::new(format!("tcp://{address}"))?
-        .with_operation_timeout(Duration::from_secs(1));
+    let config =
+        Config::new(format!("tcp://{address}"))?.with_operation_timeout(Duration::from_secs(1));
     let first = Relay::connect(config.clone()).await?;
     let second = Relay::connect(config.clone()).await?;
     let caller = Relay::connect(config).await?;
