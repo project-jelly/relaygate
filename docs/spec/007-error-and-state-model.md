@@ -163,6 +163,16 @@ Authorization은 operation admission으로 끝납니다. COMMITTED 뒤 token·cl
 보관하지 않습니다. `HALF_CLOSED`는 별도 wire/state enum이 아니라 `OPEN` Pipe의 방향별 finished flag 중
 하나만 설정된 논리 상태입니다.
 
+| SDK Pipe 작업 | 성공 경계 | 상태 의미 |
+| --- | --- | --- |
+| `write`/`write_all` | bounded session queue의 DATA 수락 | local transport write 완료 전일 수 있음 |
+| `flush` | 해당 Pipe의 앞선 DATA에 대한 local transport flush 완료 | FIN 없이 write half 유지 |
+| `shutdown`/`shutdown_write` | 열린 Pipe의 앞선 DATA와 단일 FIN에 대한 local transport flush 완료 | write half 종료, read half 유지 |
+
+이 완료 경계는 상대 Gateway·application의 수신 또는 처리 확인이 아닙니다. Writer 실패·session 종료는 기존
+오류 code·origin을 유지하며 `AsyncWrite` 오류는 `Error::from_io`로 조회합니다. `Relay::close`는 즉시 runtime을
+종료하며 pending DATA·FIN을 drain하지 않습니다.
+
 ## RouteTable registration 상태
 
 ```mermaid

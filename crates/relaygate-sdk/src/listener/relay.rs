@@ -376,6 +376,8 @@ impl Relay {
     }
 
     /// Stops managed reconnection and closes all desired Listener handles.
+    /// Pending DATA and FIN are not drained; finish each Pipe's flush or write
+    /// shutdown before calling this when local transmission must complete.
     pub fn close(&self) {
         self.inner.cancel.cancel();
         self.inner.close_all();

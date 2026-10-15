@@ -125,3 +125,4 @@ Pipe 상태와 전이는 [SPEC 007](007-error-and-state-model.md#authorization�
 | `PIPE-005` | Pipe terminal cleanup은 해당 Pipe에 한정되고 sibling Pipe, Listener와 Binding은 유지된다. |
 | `PIPE-006` | Pipe I/O success는 RelayGate byte path의 성공이며 application acknowledgement는 application protocol이 정의한다. |
 | `PIPE-007` | inbound DATA는 Pipe별 frame·byte 상한과 Relay 전체 byte 상한을 함께 예약한다. 부분 읽기 중인 frame도 전부 소비될 때까지 점유한다. 초과는 해당 Pipe만 `RESET(RESOURCE_EXHAUSTED)`하고 읽기·drop·terminal cleanup은 점유를 반환한다. |
+| `PIPE-008` | `write`/`write_all` 성공은 bounded session queue의 DATA 수락이다. `flush`는 해당 Pipe의 앞선 DATA가 local transport writer에서 flush될 때까지 기다린다. 열린 Pipe의 `shutdown`/`shutdown_write`는 앞선 DATA와 단일 FIN의 같은 완료를 기다리고 read half는 유지한다. 상대 Gateway·application 수신이나 처리는 보장하지 않는다. |
