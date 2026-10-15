@@ -108,6 +108,7 @@ fn actor_for_open(writer_capacity: usize) -> Result<TestActor, Box<dyn Error>> {
         allocator: StreamIdAllocator::new(StreamEndpoint::Dialer),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Acceptor),
         streams: BTreeMap::new(),
+        ready_streams: Default::default(),
         aggregate_writer,
         notices,
         active_opens,
@@ -135,6 +136,150 @@ fn opened_local_stream(open_identity: OpenIdentity) -> Result<RuntimeStream, Box
         origin: StreamOrigin::Local,
         open_deadline: None,
     })
+}
+
+#[tokio::test]
+async fn sparse_streams_preserve_fifo_and_ascending_passes_after_writer_pressure()
+-> Result<(), Box<dyn Error>> {
+    let (mut actor, mut frames, mut notices, _, _) = actor_for_open(4)?;
+    for raw in (0..128).step_by(2) {
+        let identity = OpenIdentity::new(GatewayId::new(), SessionId::new(), raw);
+        assert!(actor.active_opens.reserve(identity)?);
+        actor
+            .streams
+            .insert(StreamId::from_raw(raw), opened_local_stream(identity)?);
+    }
+    actor.stream_count.store(64, Ordering::Relaxed);
+
+    // Arrival order differs from stream order; most streams have no DATA.
+    for sequence in 0..2 {
+        for raw in [126, 62, 2] {
+            let (reply, result) = oneshot::channel();
+            actor
+                .handle_command(TransportCommand::Stream {
+                    stream_id: StreamId::from_raw(raw),
+                    command: StreamCommand::Data {
+                        payload: Bytes::from(vec![sequence]),
+                    },
+                    reply,
+                })
+                .await;
+            result.await??;
+        }
+    }
+
+    actor.flush_stream_queues().await;
+    // A second flush while still full must not lose or duplicate the front.
+    actor.flush_stream_queues().await;
+    for (raw, sequence) in [(2, 0), (62, 0), (126, 0), (2, 1)] {
+        assert!(matches!(
+            frames.try_recv()?,
+            PeerFrame::Data { stream_id, payload }
+                if stream_id == StreamId::from_raw(raw) && payload.as_ref() == [sequence]
+        ));
+    }
+    assert!(frames.try_recv().is_err());
+
+    // The drained low-ID stream becomes ready again before the next pass.
+    let (reply, result) = oneshot::channel();
+    actor
+        .handle_command(TransportCommand::Stream {
+            stream_id: StreamId::from_raw(2),
+            command: StreamCommand::Data {
+                payload: Bytes::from_static(&[2]),
+            },
+            reply,
+        })
+        .await;
+    result.await??;
+    actor.flush_stream_queues().await;
+    for (raw, sequence) in [(2, 2), (62, 1), (126, 1)] {
+        assert!(matches!(
+            frames.try_recv()?,
+            PeerFrame::Data { stream_id, payload }
+                if stream_id == StreamId::from_raw(raw) && payload.as_ref() == [sequence]
+        ));
+    }
+    actor.flush_stream_queues().await;
+    assert!(frames.try_recv().is_err());
+    assert!(notices.try_recv().is_err());
+    assert_eq!(actor.stream_count.load(Ordering::Relaxed), 64);
+    assert!(!actor.closure.token().is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_notice_backpressure_does_not_interrupt_the_current_stream_pass()
+-> Result<(), Box<dyn Error>> {
+    let (mut actor, mut frames, mut notices, _, _) = actor_for_open(4)?;
+    let identities = [
+        OpenIdentity::new(GatewayId::new(), SessionId::new(), 1),
+        OpenIdentity::new(GatewayId::new(), SessionId::new(), 2),
+    ];
+    for (raw, identity) in [0, 2].into_iter().zip(identities) {
+        assert!(actor.active_opens.reserve(identity)?);
+        actor
+            .streams
+            .insert(StreamId::from_raw(raw), opened_local_stream(identity)?);
+    }
+    actor.stream_count.store(2, Ordering::Relaxed);
+    for _ in 0..4 {
+        actor.notices.try_send(TransportNotice::AttemptEnded {
+            open_identity: identities[0],
+        })?;
+    }
+    for (raw, command) in [
+        (0, StreamCommand::Close),
+        (
+            2,
+            StreamCommand::Data {
+                payload: Bytes::from_static(b"sibling"),
+            },
+        ),
+    ] {
+        let (reply, result) = oneshot::channel();
+        actor
+            .handle_command(TransportCommand::Stream {
+                stream_id: StreamId::from_raw(raw),
+                command,
+                reply,
+            })
+            .await;
+        result.await??;
+    }
+    {
+        let flush = actor.flush_stream_queues();
+        tokio::pin!(flush);
+        assert!(futures_util::poll!(flush.as_mut()).is_pending());
+        assert!(matches!(
+            frames.try_recv()?,
+            PeerFrame::Close { stream_id } if stream_id == StreamId::from_raw(0)
+        ));
+        assert!(matches!(
+            frames.try_recv()?,
+            PeerFrame::Data { stream_id, payload }
+                if stream_id == StreamId::from_raw(2) && payload == Bytes::from_static(b"sibling")
+        ));
+        assert!(frames.try_recv().is_err());
+        let _ = notices.try_recv()?;
+        flush.await;
+    }
+    for _ in 0..3 {
+        assert!(matches!(
+            notices.try_recv()?,
+            TransportNotice::AttemptEnded { .. }
+        ));
+    }
+    assert!(matches!(
+        notices.try_recv()?,
+        TransportNotice::StreamEnded { key, open_identity }
+            if key.stream_id() == StreamId::from_raw(0) && open_identity == identities[0]
+    ));
+    assert!(notices.try_recv().is_err());
+    assert_eq!(actor.stream_count.load(Ordering::Relaxed), 1);
+    assert!(!actor.active_opens.contains(identities[0]));
+    assert!(actor.active_opens.contains(identities[1]));
+    Ok(())
 }
 
 #[tokio::test]
@@ -612,6 +757,7 @@ async fn cleanup_reset_is_stream_scoped_until_commit_failure_closes_transport()
         allocator: StreamIdAllocator::new(StreamEndpoint::Dialer),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Acceptor),
         streams,
+        ready_streams: Default::default(),
         aggregate_writer,
         notices,
         active_opens,
@@ -735,6 +881,7 @@ async fn invalid_frame_during_local_opening_emits_failed_not_reset() -> Result<(
         allocator: StreamIdAllocator::new(StreamEndpoint::Dialer),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Acceptor),
         streams,
+        ready_streams: Default::default(),
         aggregate_writer,
         notices,
         active_opens,
