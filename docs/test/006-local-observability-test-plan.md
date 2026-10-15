@@ -126,6 +126,7 @@ Echo goodput은 이 왕복 workload의 처리율이다. Streaming 최대 대역�
 | `OBS-012` | SDK observability contract tests | 중첩 reconnect 2→1→0, close/drop cleanup, polled dial 취소 1회; initial connect handshake/backoff deadline·caller cancel·재시도 후 성공을 각각 최종 결과 1회로 기록, reconnect 시도 deadline 계측 유지 |
 | `OBS-008` | Compose `latency` 기본·동시성 profile + JSON validator | 9개 경로·active/idle 설정 일치, 모든 Pipe의 sample 완료, byte·RTT·공통 wall time 집계 일치 |
 | `OBS-002` | Compose traffic 종료 후 metric 검사 | GW session·binding·pending·Pipe·stream과 RT mapping이 0으로 복귀 |
+| `OBS-001`, `OBS-002` | RT `shard::tests`의 전체 map 집계 대조 | snapshot 교체·재시도·거절·KeepAlive·해제·만료·재등록 뒤 증분 통계와 원본 상태 일치; 공유 expiry bucket 제거 시 중복 차감 없음 |
 | `OBS-003`, `OBS-005`, `OBS-006` | Gateway authorization unit/integration + metrics scrape | publish/dial authorization 결과·시간의 bounded label, raw token·claim 0건 |
 
 CI는 `relaygate-data-rtt` artifact에 기본·동시성 workload의 측정 결과를 보관합니다. 장기 RSS 누수·heap 소유권·최대 동시

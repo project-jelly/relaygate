@@ -150,6 +150,10 @@ rust = [
 id = "T-RT-01"
 status = "executable"
 rust = [
+  "shard::tests::stats_match_full_scan_through_snapshot_replacement_and_deregistration",
+  "shard::tests::rejected_updates_leave_stats_equal_to_full_scan",
+  "shard::tests::stats_match_full_scan_through_renewal_expiry_and_new_lease",
+  "shard::tests::expiry_records_count_bucket_members_and_ignore_duplicate_or_missing_removals",
   "exact_artifact_bytes_define_generation_and_ordered_authority",
   "namespace_is_part_of_the_shard_hash",
   "equal_destination_names_in_different_namespaces_are_isolated",
@@ -328,6 +332,10 @@ rust = [
 id = "T-OBS-01"
 status = "executable"
 rust = [
+  "shard::tests::stats_match_full_scan_through_snapshot_replacement_and_deregistration",
+  "shard::tests::rejected_updates_leave_stats_equal_to_full_scan",
+  "shard::tests::stats_match_full_scan_through_renewal_expiry_and_new_lease",
+  "shard::tests::expiry_records_count_bucket_members_and_ignore_duplicate_or_missing_removals",
   "gateway_metrics_expose_current_state_and_red_signals_without_secrets",
   "gateway_sdk_heartbeat_timeout_is_observable_without_payload_or_secrets",
   "gateway::tests::snapshot_admission_requires_capacity_and_non_draining_state",
