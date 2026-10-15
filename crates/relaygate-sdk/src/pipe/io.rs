@@ -227,6 +227,14 @@ impl PipeWriter {
             self.outbound.cancel_wait();
             return Poll::Ready(Ok(()));
         }
+        if message.len() > usize::from(u16::MAX) {
+            self.outbound.cancel_wait();
+            return Poll::Ready(Err(Error::new(
+                ErrorCode::InvalidArgument,
+                PeerObservation::NotObserved,
+                "RESET message must not exceed 65535 UTF-8 bytes",
+            )));
+        }
 
         match self.outbound.poll_send(context, || {
             state

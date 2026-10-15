@@ -17,7 +17,7 @@ GW A <===== PeerTransport A->B =====> GW B
 | `PEER-006` | stream FIN/CLOSE/RESET cleanup은 해당 stream에 한정된다. |
 | `PEER-007` | writer commit failure와 transport loss는 해당 transport의 stream 전체를 terminal cleanup한다. |
 | `PEER-008` | empty transport는 idle-retirement deadline에 정상 종료한다. |
-| `PEER-009` | active transport heartbeat timeout은 transport와 소속 stream을 종료한다. |
+| `PEER-009` | active transport heartbeat timeout은 transport와 소속 stream을 종료한다. 다른 OPEN deadline이 만료되어도 응답 대기 중인 PING의 nonce와 response deadline을 유지한다. |
 | `PEER-010` | peer OPEN은 exact Destination, Binding과 origin open identity를 current state와 대조한다. |
 | `PEER-011` | unknown·late·foreign frame은 current state를 유지하는 terminal/no-op 결과다. |
 | `PEER-012` | peer connect, handshake, queue와 frame은 bounded다. |

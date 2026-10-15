@@ -36,6 +36,50 @@ impl ArcWake for WakeCounter {
 }
 
 #[tokio::test]
+async fn oversized_reset_is_rejected_before_queue_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (outbound, mut receiver) = session_outbound_channel(1);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 37);
+    let (mut pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+    pipe.write_all(b"queued").await?;
+    {
+        // A cancelled writer may leave a capacity waiter behind.
+        let write = pipe.write_all(b"cancelled");
+        tokio::pin!(write);
+        assert!(futures_util::poll!(&mut write).is_pending());
+    }
+    {
+        let reset = pipe.reset(ErrorCode::Cancelled, "x".repeat(usize::from(u16::MAX) + 1));
+        tokio::pin!(reset);
+        let Poll::Ready(Err(error)) = futures_util::poll!(&mut reset) else {
+            return Err("invalid RESET must fail without waiting for queue capacity".into());
+        };
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        assert_eq!(error.origin(), ErrorOrigin::Sdk);
+        assert_eq!(error.observation(), PeerObservation::NotObserved);
+    }
+    assert!(state.terminal.borrow().is_none());
+    assert_eq!(
+        receiver.try_recv()?,
+        Frame::Data {
+            pipe_id,
+            payload: Bytes::from_static(b"queued"),
+        }
+    );
+    pipe.write_all(b"still open").await?;
+    assert_eq!(
+        receiver.try_recv()?,
+        Frame::Data {
+            pipe_id,
+            payload: Bytes::from_static(b"still open"),
+        }
+    );
+    assert!(receiver.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn pending_write_preserves_lane_failure_before_pipe_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let (outbound, mut receiver) = session_outbound_channel(1);

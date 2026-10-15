@@ -244,3 +244,6 @@ async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
         None => pending::<()>().await,
     }
 }
+
+#[cfg(test)]
+mod tests;
