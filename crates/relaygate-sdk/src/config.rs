@@ -181,6 +181,7 @@ impl Config {
     }
 
     /// Sets the bounded number of frames queued for the Gateway writer.
+    /// Must be positive and within the runtime channel bound; validated before connecting.
     #[must_use]
     pub const fn with_outbound_capacity(mut self, value: usize) -> Self {
         self.outbound_capacity = value;
@@ -223,11 +224,11 @@ impl Config {
             deadline_from_now(name, duration)?;
         }
         let limits = self.resource_limits;
-        if self.outbound_capacity == 0 {
+        if self.outbound_capacity == 0 || self.outbound_capacity > Semaphore::MAX_PERMITS {
             return Err(Error::new(
                 ErrorCode::InvalidArgument,
                 PeerObservation::NotObserved,
-                "outbound capacity must be positive",
+                "outbound capacity must be positive and within runtime bounds",
             ));
         }
         if limits.max_pending_pipes_per_listener == 0
@@ -293,6 +294,30 @@ fn deadline_from_now(name: &str, duration: Duration) -> Result<Instant> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_capacity_is_within_runtime_bounds()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for capacity in [1, Semaphore::MAX_PERMITS] {
+            assert!(
+                Config::new_insecure_for_tests("127.0.0.1:1")
+                    .with_outbound_capacity(capacity)
+                    .validate()
+                    .is_ok()
+            );
+        }
+        for capacity in [0, Semaphore::MAX_PERMITS + 1] {
+            let error = Config::new_insecure_for_tests("127.0.0.1:1")
+                .with_outbound_capacity(capacity)
+                .validate()
+                .err()
+                .ok_or("capacity outside runtime bounds must be rejected")?;
+            assert_eq!(error.code(), ErrorCode::InvalidArgument);
+            assert_eq!(error.origin(), crate::ErrorOrigin::Sdk);
+            assert_eq!(error.observation(), PeerObservation::NotObserved);
+        }
+        Ok(())
+    }
 
     #[test]
     fn resource_limits_are_positive_and_hierarchically_ordered() {

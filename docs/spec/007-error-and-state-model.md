@@ -41,6 +41,8 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 | 경로 | code / origin / observation |
 | --- | --- |
+| SDK outbound capacity 범위 초과·0 | `INVALID_ARGUMENT` / `Sdk` / `NOT_OBSERVED`; 연결 전 거절 |
+| 열린 Pipe의 reset message 65,535 bytes 초과 | `INVALID_ARGUMENT` / `Sdk` / `NOT_OBSERVED`; Pipe·session 상태와 전송 queue 유지 |
 | TLS 인증서 검증·peer certificate alert | `UNAUTHENTICATED` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
 | TLS protocol·ALPN 불일치 | `PROTOCOL_ERROR` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
 | initial connect 전체 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED`; 계측은 `error/deadline_exceeded` |
@@ -225,10 +227,13 @@ session 상한은 `RESOURCE_EXHAUSTED`)은 handshake 예산 안에서 `SESSION_R
 | PUBLISH/DIAL rate 초과 | 해당 요청, DIAL은 `NOT_OBSERVED` | session·기존 Binding·Pipe, 정리 메시지 | budget refill 뒤 새 operation; DIAL은 새 ConnectionId |
 | SDK Listener/Relay Pipe 상한 | 해당 OFFER/DIAL | RelaySession·Listener·기존/sibling Pipe | 기존 Pipe 종료 뒤 새 dial |
 | SDK Pipe/Relay inbound buffer 상한 | 해당 Pipe | RelaySession·Listener·sibling Pipe | application 소비 속도·상한 조정 뒤 새 Pipe |
-| GW–GW loss | 해당 transport의 stream/Pipe | local Binding·다른 transport | 다음 dial이 transport 생성 |
+| GW–GW loss·heartbeat timeout | 해당 transport의 stream/Pipe | local Binding·다른 transport | 다음 dial이 transport 생성 |
 | GW–RT loss | remote resolve·sync | local Binding·established Pipe | worker reconnect + snapshot |
 | RT restart | 해당 shard lease·BindingProjection | Gateway local Binding·Pipe | Gateway 재등록 |
 | GW drain | 신규 admission 후 deadline의 owned state | 다른 GW·RT state | SDK/peer reconnect |
+
+Peer PING 응답 대기 중 다른 OPEN deadline이 만료되어도 기존 nonce와 response deadline은 유지합니다.
+Matching PONG 없이 response deadline이 지나면 해당 transport를 종료합니다.
 
 ## 불변 조건
 

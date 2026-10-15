@@ -76,7 +76,7 @@ fn external_force_close_preserves_first_failure_reason() {
     assert_eq!(closure.failure_reason(), None);
 }
 
-fn actor_for_open(writer_capacity: usize) -> Result<TestActor, Box<dyn Error>> {
+pub(super) fn actor_for_open(writer_capacity: usize) -> Result<TestActor, Box<dyn Error>> {
     let config = GatewayPeerConfig::new("gateway-a")?
         .with_queue_bounds(4, 4, 4, writer_capacity, 2)
         .with_timeouts(

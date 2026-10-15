@@ -153,6 +153,10 @@ These operations do not acknowledge remote application receipt or processing.
 `flush` or write shutdown first when local write completion is required; use an
 application response or acknowledgement when remote completion is required.
 
+`Pipe::reset` and `PipeWriteHalf::reset` accept messages up to 65,535 UTF-8 bytes.
+Longer messages return `Sdk` / `InvalidArgument` before changing an open Pipe or
+queuing a frame. Resetting an already terminal Pipe remains a successful no-op.
+
 ## Readiness and cancellation
 
 | Observation | Meaning |

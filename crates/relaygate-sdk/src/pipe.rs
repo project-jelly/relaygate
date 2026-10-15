@@ -432,6 +432,10 @@ impl Pipe {
     }
 
     /// Fails both directions. Repeated calls are safe.
+    ///
+    /// On an open Pipe, messages exceeding 65,535 UTF-8 bytes return
+    /// [`ErrorCode::InvalidArgument`] without changing the Pipe or sending a RESET.
+    /// An already terminal Pipe returns success without validating the message.
     pub async fn reset(&mut self, code: ErrorCode, message: impl Into<String>) -> Result<()> {
         self.writer
             .reset(&self.owner.state, code, message.into())

@@ -45,6 +45,7 @@ Relay
 | --- | --- |
 | `ResourceLimits::default()` | process-local 보호 상한; 처리량 보장 아님 |
 | `Config::with_resource_limits` | 모든 값 양수; Listener live ≤ Relay live, Pipe bytes ≤ Relay bytes |
+| `Config::with_outbound_capacity` | 1 이상, runtime channel 상한 이하. 범위 밖 값은 연결 전에 `INVALID_ARGUMENT` |
 | incoming pending Pipe | pending·live slot 동시 점유; 작은 상한이 queue를 제한 |
 | Gateway admission | 비신뢰 client에 대한 cluster-side 권위 상한 |
 
@@ -120,7 +121,7 @@ Pipe 상태와 전이는 [SPEC 007](007-error-and-state-model.md#authorization�
 | --- | --- |
 | `PIPE-001` | Pipe는 full-duplex opaque byte stream이다. |
 | `PIPE-002` | `FIN`은 한 방향 write half-close이고 반대 방향은 계속 사용한다. |
-| `PIPE-003` | `CLOSE`는 정상 종료, `RESET`은 오류 종료다. |
+| `PIPE-003` | `CLOSE`는 정상 종료, `RESET`은 오류 종료다. 열린 Pipe의 reset message는 UTF-8 기준 최대 65,535 bytes이며 초과 입력은 상태 변경·전송 전에 `INVALID_ARGUMENT`로 거절한다. 이미 terminal인 Pipe의 reset은 성공한 no-op이다. |
 | `PIPE-004` | frame, queue와 buffer는 모두 bounded다. |
 | `PIPE-005` | Pipe terminal cleanup은 해당 Pipe에 한정되고 sibling Pipe, Listener와 Binding은 유지된다. |
 | `PIPE-006` | Pipe I/O success는 RelayGate byte path의 성공이며 application acknowledgement는 application protocol이 정의한다. |
