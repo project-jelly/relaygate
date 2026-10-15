@@ -122,9 +122,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while writing Pipe data",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while writing Pipe data"))),
             Poll::Ready(Ok(FrameCommit::Sent)) => Poll::Ready(Ok(count)),
             Poll::Ready(Ok(FrameCommit::Skipped)) => {
                 Poll::Ready(Err(state.write_error().unwrap_or_else(|| {
@@ -171,9 +171,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending FIN",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending FIN"))),
             Poll::Ready(Ok(FrameCommit::Skipped)) => self.poll_flush(state, context),
             Poll::Ready(Ok(FrameCommit::Sent)) => {
                 if state.remote_fin.load(Ordering::Acquire) {
@@ -208,9 +208,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending CLOSE",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending CLOSE"))),
             Poll::Ready(Ok(FrameCommit::Sent | FrameCommit::Skipped)) => Poll::Ready(Ok(())),
         }
     }
@@ -249,9 +249,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending RESET",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending RESET"))),
             Poll::Ready(Ok(FrameCommit::Sent | FrameCommit::Skipped)) => Poll::Ready(Ok(())),
         }
     }

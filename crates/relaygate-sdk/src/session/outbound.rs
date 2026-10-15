@@ -144,13 +144,15 @@ impl SessionOutbound {
     }
 
     fn flush_error(&self) -> Error {
+        self.failure_error("RelaySession ended before Pipe flush completed")
+    }
+
+    pub(crate) fn failure_error(&self, fallback_message: &str) -> Error {
         self.failure
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
-            .unwrap_or_else(|| {
-                Error::transport_unavailable("RelaySession ended before Pipe flush completed")
-            })
+            .unwrap_or_else(|| Error::maybe_observed(fallback_message))
             .with_observation(PeerObservation::MaybeObserved)
     }
 
