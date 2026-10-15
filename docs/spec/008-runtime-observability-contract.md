@@ -23,7 +23,11 @@ existing session·Binding·Pipe를 유지합니다.
 
 ## 로그와 metric
 
-Lifecycle log는 `debug`가 기본이며, `info`에서는 drain과 `warn` 이상 사건만 기록합니다.
+| level | 대상 |
+| --- | --- |
+| `debug` | session·Listener·Pipe의 개별 lifecycle와 요청 진단 |
+| `info` | process 시작·종료, drain, SDK reconnect episode, RT dependency ready·recovery, 명시적으로 활성화한 snapshot |
+| `warn`·`error` | 운영 경고·실패 |
 
 | category | lifecycle event |
 | --- | --- |
@@ -65,7 +69,8 @@ payload와 free-form error body는 redaction합니다. DATA RTT와 payload goodp
 | authorization | `relaygate_gateway_authorization_results_total`, `relaygate_gateway_authorization_duration_seconds` | verifier start -> success/failure |
 | heartbeat | timeout counter + `relaygate_gateway_heartbeat_duration_seconds{transport}` | committed PING -> matching PONG |
 | Gateway->RT | `relaygate_gateway_route_table_requests_total`, `relaygate_gateway_route_table_request_duration_seconds` | client queue admission -> response/failure |
-| RT actor | `relaygate_route_table_requests_total`, `relaygate_route_table_request_duration_seconds` | actor service start -> result |
+| RT 응답 | `relaygate_route_table_requests_total` | bounded response의 writer queue admission 성공; 최종 wire outcome·code |
+| RT actor | `relaygate_route_table_request_duration_seconds` | actor service start -> expiry 정리·검증·domain result; actor outcome |
 | peer | `relaygate_gateway_peer_handshakes_total`, `relaygate_gateway_peer_transport_closed_total` | transport lifecycle outcome |
 | GW->RT 연결 | `relaygate_gateway_route_connection_attempts_total{outcome,code}` | connect·handshake 시도 결과 |
 | RT dependency 전이 | `relaygate_gateway_route_dependency_transitions_total{previous,current}`, `relaygate_gateway_route_recovery_duration_seconds` | `starting|ready|degraded|terminal` 전이; degraded 진입 -> ready 복귀 |
@@ -80,6 +85,9 @@ SDK session_connect -> token source -> SDK dial -> established Pipe DATA RTT
 ```
 
 GW->RT와 RT actor histogram은 표본 경계가 다릅니다. 두 p95 차이를 network p95로 해석하지 않습니다.
+RT actor 시간은 actor queue 대기, 결과 생성 후 snapshot 갱신·reply 전달과 socket write를 포함하지 않습니다.
+RT 응답 counter는 actor 진입 전 거절이나 응답 크기 제한 결과도 포함하며, queue에 넣지 못한 응답은 세지 않습니다.
+따라서 두 지표의 표본 수·outcome은 일치하지 않을 수 있고, 응답 counter는 원격 수신 확인이 아닙니다.
 Heartbeat는 liveness RTT, DATA RTT는 payload 왕복입니다. SDK dial 시간은 token source와 session·queue 대기를
 포함합니다.
 
