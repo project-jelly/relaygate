@@ -1,96 +1,40 @@
-name: Kind Acceptance
+name: Peer Tail Hosted Check (temporary branch only)
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/kind-acceptance.yml
-      - tests/kind/**
-      - crates/**
-      - examples/**
-      - deploy/docker/**
-      - deploy/helm/**
-      - Cargo.lock
-      - Cargo.toml
-      - rust-toolchain.toml
-      # Test-only files cannot change the binaries or images Kind exercises.
-      - "!crates/**/tests/**"
-      - "!crates/**/tests.rs"
-      - "!crates/**/*_tests.rs"
-      - "!crates/**/*_tests/**"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: peer-tail-hosted-check
+  cancel-in-progress: false
+
 env:
-  CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RUST_TOOLCHAIN: 1.96.1
-  KIND_VERSION: v0.33.0
-  KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
 
 jobs:
-  acceptance:
-    name: RT2/GW3 Kind (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: mtls
-            internal-transport: mtls
-            internal-source: existingSecret
-          - name: plaintext
-            internal-transport: plaintext
-            internal-source: existingSecret
-          - name: cert-manager
-            internal-transport: mtls
-            internal-source: certManager
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  experiment:
+    if: github.ref == 'refs/heads/codex/peer-tail-hosted-check' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
         with:
-          version: v1.32.2
-
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-        with:
-          version: v3.15.2
-
-      - name: Install pinned kind
-        run: |
-          curl -fsSLo "$RUNNER_TEMP/kind" \
-            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
-          echo "${KIND_SHA256}  ${RUNNER_TEMP}/kind" | sha256sum --check
-          sudo install -m 0755 "$RUNNER_TEMP/kind" /usr/local/bin/kind
-
-      - name: Validate acceptance harness
-        run: |
-          bash -n tests/kind/run.sh
-          bash -n tests/kind/certificates.sh
-
-      - name: Run Kind acceptance
-        env:
-          RELAYGATE_KIND_INTERNAL_TRANSPORT: ${{ matrix.internal-transport }}
-          RELAYGATE_KIND_INTERNAL_SOURCE: ${{ matrix.internal-source }}
-        run: tests/kind/run.sh
-
-      - name: Upload acceptance evidence
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate experiment helpers
+        run: python3 -m unittest discover -s .github/scripts -p test_peer_tail_hosted.py -v
+      - name: Build exact sources and run one fixed experiment
+        run: python3 .github/scripts/peer_tail_hosted.py run
+      - name: Clean only this experiment's resources
+        if: always()
+        run: python3 .github/scripts/peer_tail_hosted.py cleanup
+      - name: Upload all experiment evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: relaygate-kind-acceptance-${{ matrix.name }}
-          path: target/kind-acceptance
+          name: peer-tail-hosted-${{ github.run_id }}
+          path: target/peer-tail-hosted
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30

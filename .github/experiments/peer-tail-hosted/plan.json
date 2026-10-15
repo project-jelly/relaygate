@@ -1,0 +1,97 @@
+{
+  "protocol_id": "peer-tail-linux-amd64-20261015",
+  "attempt_limit": 1,
+  "baseline": "96123e06fdf2f4adceb6ac390d62cd225e5bf774",
+  "candidate": "90b23f87ab3f7a3ed11e1c938522058eb79fa1b1",
+  "platform": "linux/amd64",
+  "pairs": 5,
+  "variant_order": [
+    [
+      "baseline",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate"
+    ]
+  ],
+  "profile_order": [
+    [
+      "serial",
+      "idle"
+    ],
+    [
+      "idle",
+      "serial"
+    ],
+    [
+      "serial",
+      "idle"
+    ],
+    [
+      "idle",
+      "serial"
+    ],
+    [
+      "serial",
+      "idle"
+    ]
+  ],
+  "profiles": [
+    {
+      "name": "serial",
+      "payload": 64,
+      "active": 1,
+      "idle": 0,
+      "warmup": 1000,
+      "samples": 10000
+    },
+    {
+      "name": "idle",
+      "payload": 64,
+      "active": 1,
+      "idle": 256,
+      "warmup": 1000,
+      "samples": 10000
+    }
+  ],
+  "control_limit": 4096,
+  "settle_seconds": 30,
+  "telemetry_interval_seconds": 5,
+  "cpu_scheduling": "Both variants use the same available runner CPUs with no per-service CPU quota or affinity. Record CPU count and affinity before building. This is not physical CPU dedication.",
+  "load_guard": {
+    "steal_percent_max": 5.0,
+    "consecutive_violations": 2,
+    "unexpected_compiler_after_measurement_start": "abort immediately",
+    "unknown_busy_user_process": "count as external; no broad allowlist",
+    "classification_completeness": "During a stable measurement stage, all expected runtime containers must be running and their init PID plus RelayGate child process must be visible and assigned to that container via cgroup or PID ancestry. Otherwise abort.",
+    "excluded_cpu": "Own Compose container processes and harness descendants are separate from external user CPU. Kernel threads and exact Docker infrastructure comm names dockerd, containerd and containerd-shim are recorded separately, not silently discarded. Runner user processes remain external.",
+    "rationale": "A 2-4 vCPU Linux runner can legitimately be busy with this experiment. The local macOS aggregate-idle guard would conflate own load with interference, so this independent protocol guards process-attributed external CPU and VM steal instead.",
+    "external_plus_unattributed_cpu_cores_max": 0.25,
+    "cpu_reconciliation": "For each ~5-second interval reconcile /proc/stat user+nice+system ticks against all visible per-process user+system tick deltas. Add every positive unexplained residual to external user CPU, including exited-between-snapshot work. No residual tolerance is subtracted. Small counter/sample alignment differences are therefore conservatively included; the shared 0.25-core/two-consecutive-interval budget applies during settle, startup, measurement and cleanup.",
+    "irq_treatment": "Global IRQ and softirq CPU are recorded separately because the experiment itself creates network interrupts. They are not attributed to unknown user processes or added to the external task CPU guard. VM steal has its own >5% two-interval guard. Total host busy is always recorded.",
+    "compiler_sampling_limit": "Abort immediately when a live compiler is observed after measurement starts. Five-second snapshots do not prove absence of every sub-poll compiler/spike; vanished task CPU is covered by conservative global reconciliation and the fixed consecutive-interval budget."
+  },
+  "primary": "Within each paired block, median percent change of six one-hop serial p99 values, candidate/baseline. The five blocks are the summary units; individual paths are not independent trials.",
+  "regression_signal": {
+    "minimum_blocks_over_threshold": 4,
+    "p99_increase_percent": 10.0,
+    "overall_block_median_must_exceed_threshold": true
+  },
+  "acceptance": "All twenty full-nine-path runs validate, all requested samples complete, zero errors, load/provenance/cleanup checks pass. The primary regression signal holds runtime release. Absence of the signal is not equivalence or production-capacity proof.",
+  "stop": "Any build/setup/probe/validation/load failure stops this fixed single attempt. No automatic or result-driven repeats. Incomplete means runtime release decision remains on hold.",
+  "provenance": "Build both exact git archives on the same runner before measurement, using the identical source Dockerfile and one resolved Rust base digest. Record original/effective Dockerfile hashes, source SHAs/trees, immutable local image IDs, toolchain/base image, fixtures/probe hashes, hardware and run ID. No registry push.",
+  "separation": "Do not pool this linux/amd64 experiment with prior incomplete local linux/arm64 runs. Preserve and report those separately."
+}
