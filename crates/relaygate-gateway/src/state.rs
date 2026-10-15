@@ -547,7 +547,7 @@ fn observe_dial_request() {
     metrics::counter!("relaygate_gateway_dial_requests_total").increment(1);
 }
 
-fn observe_dial_result(started_at: Option<Instant>, code: Option<ErrorCode>) {
+pub(crate) fn observe_dial_result(started_at: Option<Instant>, code: Option<ErrorCode>) {
     let Some(started_at) = started_at else {
         return;
     };

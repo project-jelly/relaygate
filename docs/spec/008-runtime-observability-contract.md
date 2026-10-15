@@ -85,6 +85,10 @@ SDK session_connect -> token source -> SDK dial -> established Pipe DATA RTT
                                       `-> GW precheck -> authorization -> local/RT resolve -> OFFER
 ```
 
+GW DIAL은 precheck 통과 후 authorization 대기 중 session 취소나 writer 실패로 중단돼도 기존 `cancelled`
+result와 duration을 한 번 기록합니다. State에 인계한 뒤의 결과는 state가 기록하며, 완료되지 않은 verification의
+authorization result·duration은 기록하지 않습니다.
+
 GW->RT와 RT actor histogram은 표본 경계가 다릅니다. 두 p95 차이를 network p95로 해석하지 않습니다.
 RT actor 시간은 actor queue 대기, 결과 생성 후 snapshot 갱신·reply 전달과 socket write를 포함하지 않습니다.
 RT 응답 counter는 actor 진입 전 거절이나 응답 크기 제한 결과도 포함하며, queue에 넣지 못한 응답은 세지 않습니다.
