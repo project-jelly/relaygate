@@ -23,6 +23,7 @@ uuid.workspace = true
 [dev-dependencies]
 metrics-util.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

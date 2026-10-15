@@ -40,7 +40,8 @@ existing session·Binding·Pipe를 유지합니다.
 | protection | TLS, queue, capacity rejection |
 
 Lifecycle field는 bounded identifier와 outcome을 사용합니다. AccessToken, decoded claim, credential, private key,
-payload와 free-form error body는 redaction합니다. DATA RTT와 payload goodput은 명시적으로 실행한 SDK probe가
+payload와 free-form error body는 redaction합니다. RouteTable frame의 JSON 해석 오류는 입력 원문을 보관하거나
+진단에 포함하지 않습니다. DATA RTT와 payload goodput은 명시적으로 실행한 SDK probe가
 측정합니다.
 
 | 운영 질문 | metric | 판정 |

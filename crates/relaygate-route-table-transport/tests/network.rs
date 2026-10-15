@@ -1,15 +1,198 @@
 mod support;
 
-use std::time::Duration;
+use std::{
+    io,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use relaygate_route_table::{Destination, LeaseId, RegistrationRevision};
-use relaygate_route_table_transport::ErrorCode;
-use tokio::net::TcpStream;
+use relaygate_route_table_transport::{
+    ErrorCode, GatewayName, RouteTableClient, RouteTableClientConfig,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    time::timeout,
+};
 use uuid::Uuid;
 
 use support::{
     RunningService, TestResult, binding, binding_snapshot, gateway, registration_key, session,
 };
+
+const PARSER_MARKER: &str = "RT_PARSER_MARKER_MUST_NOT_ESCAPE";
+const PARSER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("test log buffer poisoned"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+async fn write_raw_frame(stream: &mut TcpStream, payload: &[u8]) -> io::Result<()> {
+    let length = u32::try_from(payload.len()).map_err(io::Error::other)?;
+    stream.write_all(b"RT\x03").await?;
+    stream.write_all(&length.to_be_bytes()).await?;
+    stream.write_all(payload).await
+}
+
+async fn read_raw_frame(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    let mut header = [0; 7];
+    stream.read_exact(&mut header).await?;
+    assert_eq!(&header[..3], b"RT\x03");
+    let length = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
+    assert!(length <= 256 * 1024, "test peer sent an oversized frame");
+    let mut payload = vec![0; length];
+    stream.read_exact(&mut payload).await?;
+    Ok(payload)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_hello_logs_redacted_error_and_closes_connection() -> TestResult {
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let writer = Arc::clone(&logs);
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(move || CapturedLogs(Arc::clone(&writer)))
+        .finish();
+    // The current-thread runtime keeps service tasks under this test's subscriber.
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    timeout(PARSER_TEST_TIMEOUT, async {
+        let service = RunningService::start(Duration::from_secs(5)).await?;
+        let result: TestResult<Vec<u8>> = async {
+            let mut stream = TcpStream::connect(service.endpoint).await?;
+            let payload = format!(r#"{{"frame":"{PARSER_MARKER}"}}"#);
+            write_raw_frame(&mut stream, payload.as_bytes()).await?;
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await?;
+            Ok(response)
+        }
+        .await;
+        service.stop().await?;
+        assert!(
+            result?.is_empty(),
+            "malformed HELLO must close without a response"
+        );
+        let output = String::from_utf8(
+            logs.lock()
+                .map_err(|_| io::Error::other("test log buffer poisoned"))?
+                .clone(),
+        )?;
+        assert!(output.contains("route_table.handshake.failed"));
+        assert!(output.contains("protocol_error"));
+        assert!(
+            !output.contains(PARSER_MARKER),
+            "parser input leaked in DEBUG log: {output}"
+        );
+        Ok(())
+    })
+    .await?
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_request_returns_redacted_protocol_fault() -> TestResult {
+    timeout(PARSER_TEST_TIMEOUT, async {
+        let service = RunningService::start(Duration::from_secs(5)).await?;
+        let result: TestResult<(serde_json::Value, Vec<u8>)> = async {
+            let mut stream = TcpStream::connect(service.endpoint).await?;
+            write_raw_frame(&mut stream, br#"{"frame":"HELLO","role":"gateway","gateway_name":"gw-a","gateway_id":"00000000-0000-0000-0000-000000000001"}"#).await?;
+            let welcome: serde_json::Value = serde_json::from_slice(&read_raw_frame(&mut stream).await?)?;
+            assert_eq!(welcome["frame"], "WELCOME");
+            let payload = format!(r#"{{"frame":"{PARSER_MARKER}"}}"#);
+            write_raw_frame(&mut stream, payload.as_bytes()).await?;
+            let fault = serde_json::from_slice(&read_raw_frame(&mut stream).await?)?;
+            let mut trailing = Vec::new();
+            stream.read_to_end(&mut trailing).await?;
+            Ok((fault, trailing))
+        }
+        .await;
+        service.stop().await?;
+        let (fault, trailing) = result?;
+        assert_eq!(fault["frame"], "PROTOCOL_FAULT");
+        assert_eq!(fault["role"], "route_table");
+        assert_eq!(fault["code"], "PROTOCOL_ERROR");
+        assert!(!fault.to_string().contains(PARSER_MARKER), "parser input leaked in ProtocolFault: {fault}");
+        assert_eq!(fault["message"], "invalid RouteTable frame payload");
+        assert!(trailing.is_empty(), "ProtocolFault must be followed by EOF");
+        Ok(())
+    })
+    .await?
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_response_returns_redacted_client_transport_error() -> TestResult {
+    timeout(PARSER_TEST_TIMEOUT, async {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = listener.local_addr()?;
+        let server = async {
+            let (mut stream, _) = listener.accept().await?;
+            let hello: serde_json::Value =
+                serde_json::from_slice(&read_raw_frame(&mut stream).await?)?;
+            assert_eq!(hello["frame"], "HELLO");
+            write_raw_frame(&mut stream, br#"{"frame":"WELCOME","role":"route_table"}"#).await?;
+            let request: serde_json::Value =
+                serde_json::from_slice(&read_raw_frame(&mut stream).await?)?;
+            assert_eq!(request["frame"], "REQUEST");
+            let payload = format!(r#"{{"frame":"{PARSER_MARKER}"}}"#);
+            write_raw_frame(&mut stream, payload.as_bytes()).await?;
+            let mut trailing = Vec::new();
+            stream.read_to_end(&mut trailing).await?;
+            assert!(
+                trailing.is_empty(),
+                "client must close after a malformed response"
+            );
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        };
+        let client = async {
+            let second = Duration::from_secs(1);
+            let client = RouteTableClient::connect(
+                endpoint,
+                GatewayName::new("gw-a")?,
+                gateway(1),
+                RouteTableClientConfig::new(4, 256 * 1024, second, second, second)?,
+            )
+            .await?;
+            let generation = relaygate_route_table::ShardDirectory::from_json_bytes(
+                support::ONE_SHARD_DIRECTORY,
+            )?
+            .generation();
+            let destination = "test/parser-redaction".parse()?;
+            let error = client
+                .resolve(generation, &destination)
+                .await
+                .err()
+                .ok_or("malformed response succeeded")?;
+            let next = client
+                .resolve(generation, &destination)
+                .await
+                .err()
+                .ok_or("failed connection remained usable")?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((error, next))
+        };
+        let ((), (error, next)) = tokio::try_join!(server, client)?;
+        assert_eq!(error.code(), ErrorCode::ProtocolError);
+        assert!(
+            !format!("{error} {error:?}").contains(PARSER_MARKER),
+            "parser input leaked in client error: {error}"
+        );
+        assert_eq!(error.message(), "invalid RouteTable frame payload");
+        assert_eq!(next.code(), ErrorCode::Unavailable);
+        Ok(())
+    })
+    .await?
+}
 
 #[tokio::test]
 async fn full_registration_lifecycle_and_ready_empty_not_found() -> TestResult {
