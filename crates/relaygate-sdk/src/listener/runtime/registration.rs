@@ -209,6 +209,9 @@ pub(super) async fn commit_registration_token(
     let state = Arc::clone(&pending.state);
     session.pending_by_destination.remove(&state.destination);
     if !is_current_desired(inner, &state) || *state.status.borrow() == ListenerStatus::Closed {
+        // Reconcile may have skipped a replacement while this pending token
+        // still owned the Destination. Revisit desired state after releasing it.
+        inner.reconcile.notify_one();
         return Ok(());
     }
     let token = match token {
