@@ -167,6 +167,21 @@ impl std::fmt::Debug for TransportHandle {
 }
 
 impl TransportHandle {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        peer_gateway_id: GatewayId,
+        peer_transport_id: PeerTransportId,
+        commands: mpsc::Sender<TransportCommand>,
+        closure: TransportClosure,
+    ) -> Self {
+        Self {
+            peer_gateway_id,
+            peer_transport_id,
+            commands,
+            closure,
+        }
+    }
+
     pub(super) fn try_send(&self, command: TransportCommand) -> Result<(), PeerFailure> {
         match self.commands.try_send(command) {
             Ok(()) => Ok(()),

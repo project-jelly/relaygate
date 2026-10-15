@@ -25,6 +25,11 @@ GW A <===== PeerTransport A->B =====> GW B
 PeerTransport는 다음 dial에서 재생성할 수 있는 availability optimization입니다. Established stream의
 lifecycle은 해당 transport terminal 결과로 끝납니다.
 
+Peer manager가 유효한 stream key로 수락한 `CLOSE`·`RESET`·`FAILED`를 transport command queue에
+전달하지 못하면, 호출자가 응답을 계속 기다리는지와 무관하게 해당 transport를 닫아 `PEER-007` 범위로
+정리합니다. queue에 정상 전달된 terminal command는 기존 stream 범위를 유지하며, `DATA`·`FIN`의
+queue 거절은 이 강제 종료를 유발하지 않습니다.
+
 Peer frame은 access token을 포함하지 않습니다. Entry Gateway의 operation authorization 결과는 선택된
 Destination과 open identity로 축소되며 Owner Gateway는 current Binding을 다시 대조합니다.
 
