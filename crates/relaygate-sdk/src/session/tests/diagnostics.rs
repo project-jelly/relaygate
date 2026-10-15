@@ -447,3 +447,138 @@ async fn cancelled_initial_listen_drops_token_supply() -> TestResult {
     timeout(Duration::from_secs(1), server).await???;
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_precommit_listen_allows_immediate_same_destination_relisten() -> TestResult {
+    struct SupplyGuard(tokio::sync::mpsc::UnboundedSender<()>);
+    impl Drop for SupplyGuard {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    timeout(Duration::from_secs(5), async {
+        for wait_for_cleanup in [true, false] {
+            let socket = TcpListener::bind("127.0.0.1:0").await?;
+            let address = socket.local_addr()?;
+            let destination: Destination = "test/relisten".parse()?;
+            let expected_destination = destination.clone();
+            let server = tokio::spawn(async move {
+                let (mut framed, _) = welcome(&socket).await?;
+                let request_id = match framed.next().await.ok_or("session ended before PUBLISH")?? {
+                    Frame::Publish { request_id, destination, access_token } => {
+                        assert_eq!(destination, expected_destination);
+                        assert_eq!(access_token.expose_secret(), "replacement-grant");
+                        request_id
+                    }
+                    _ => return Err("expected replacement PUBLISH".into()),
+                };
+                framed.send(Frame::Published { request_id, binding_id: BindingId::new() }).await?;
+                assert!(framed.next().await.is_none(), "unexpected additional PUBLISH");
+                Ok::<_, Box<dyn StdError + Send + Sync>>(())
+            });
+            let relay = Relay::connect(
+                Config::new_insecure_for_tests(address.to_string())
+                    .with_operation_timeout(Duration::from_millis(300)),
+            ).await?;
+            let (started, mut supply_started) = tokio::sync::mpsc::unbounded_channel();
+            let (dropped, mut supply_dropped) = tokio::sync::mpsc::unbounded_channel();
+            let source = AccessTokenSource::dynamic(move |_| {
+                let started = started.clone();
+                let dropped = dropped.clone();
+                async move {
+                    let _guard = SupplyGuard(dropped);
+                    let _ = started.send(());
+                    std::future::pending::<Result<AccessToken, AccessTokenSourceError>>().await
+                }
+            });
+            let mut first = Box::pin(relay.listen(destination.clone(), source));
+            tokio::select! {
+                started = supply_started.recv() => { started.ok_or("source did not start")?; }
+                result = &mut first => return Err(format!("first listen unexpectedly settled: {result:?}").into()),
+            }
+            drop(first);
+            if wait_for_cleanup {
+                supply_dropped.recv().await.ok_or("source did not stop")?;
+            }
+
+            let replacement_calls = Arc::new(AtomicUsize::new(0));
+            let source_calls = Arc::clone(&replacement_calls);
+            let replacement_token = AccessToken::new("replacement-grant")?;
+            let source = AccessTokenSource::dynamic(move |_| {
+                source_calls.fetch_add(1, Ordering::SeqCst);
+                let token = replacement_token.clone();
+                async move { Ok(token) }
+            });
+            let mut replacement = Box::pin(relay.listen(destination, source));
+            // Register the replacement before yielding to the session actor, so
+            // its reconcile notification can precede the old token cleanup.
+            assert!(futures_util::poll!(replacement.as_mut()).is_pending());
+            if !wait_for_cleanup {
+                supply_dropped.recv().await.ok_or("source did not stop")?;
+            }
+            // The original callback is gone: any remaining wait is SDK progress,
+            // not an application-owned token request still running.
+            assert_eq!(relay.status(), RelayStatus::Active);
+            let listener = replacement.await?;
+            assert_eq!(listener.status(), ListenerStatus::Active);
+            assert_eq!(replacement_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(relay.status(), RelayStatus::Active);
+            relay.close();
+            server.await??;
+        }
+        Ok(())
+    }).await?
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_committed_listen_reconnects_before_same_destination_relisten() -> TestResult {
+    timeout(Duration::from_secs(5), async {
+        let socket = TcpListener::bind("127.0.0.1:0").await?;
+        let address = socket.local_addr()?;
+        let (published, publish_seen) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut old, old_session) = welcome(&socket).await?;
+            assert!(matches!(old.next().await, Some(Ok(Frame::Publish { .. }))));
+            let _ = published.send(());
+            assert!(old.next().await.is_none(), "cancelled PUBLISH did not end its session");
+            let (mut replacement, new_session) = welcome(&socket).await?;
+            assert_ne!(old_session, new_session);
+            let request_id = match replacement.next().await.ok_or("missing replacement PUBLISH")?? {
+                Frame::Publish { request_id, destination, access_token } => {
+                    assert_eq!(destination.to_string(), "test/committed-relisten");
+                    assert_eq!(access_token.expose_secret(), "replacement-grant");
+                    request_id
+                }
+                _ => return Err("expected replacement PUBLISH".into()),
+            };
+            replacement.send(Frame::Published { request_id, binding_id: BindingId::new() }).await?;
+            assert!(replacement.next().await.is_none());
+            Ok::<_, Box<dyn StdError + Send + Sync>>(())
+        });
+        let relay = Relay::connect(
+            Config::new_insecure_for_tests(address.to_string())
+                .with_operation_timeout(Duration::from_secs(1))
+                .with_reconnect_backoff(Duration::from_millis(10), Duration::from_millis(20)),
+        ).await?;
+        let destination: Destination = "test/committed-relisten".parse()?;
+        let mut first = Box::pin(relay.listen(
+            destination.clone(), AccessToken::new("first-grant")?.into(),
+        ));
+        tokio::select! {
+            seen = publish_seen => { seen?; }
+            result = &mut first => return Err(format!("first listen unexpectedly settled: {result:?}").into()),
+        }
+        drop(first);
+        let mut replacement = Box::pin(relay.listen(
+            destination, AccessToken::new("replacement-grant")?.into(),
+        ));
+        assert!(futures_util::poll!(replacement.as_mut()).is_pending());
+        let listener = replacement.await?;
+        assert_eq!(listener.status(), ListenerStatus::Active);
+        assert_eq!(relay.status(), RelayStatus::Active);
+        relay.close();
+        server.await??;
+        Ok(())
+    }).await?
+}

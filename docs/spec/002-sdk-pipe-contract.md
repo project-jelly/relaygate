@@ -110,7 +110,7 @@ Listener 상태와 전이는 [SPEC 007](007-error-and-state-model.md#sdk와-bind
 | `SDK-010` | `accept`는 distinct Pipe를 정확히 한 번 반환한다. |
 | `SDK-011` | session 종료는 old unaccepted Pipe를 제거한다. |
 | `SDK-012` | Listener close는 신규 수신과 unaccepted Pipe를 끝내고 returned Pipe는 독립 유지한다. |
-| `SDK-013` | 같은 Relay의 동일 Destination 중복 listen은 `ALREADY_EXISTS`다. |
+| `SDK-013` | 같은 Relay의 동일 Destination 중복 listen은 `ALREADY_EXISTS`다. PUBLISH pre-commit initial listen 취소 뒤 같은 Destination으로 새 listen을 시작하면 이전 token 공급 정리가 새 등록 진행을 막지 않는다. |
 | `SDK-021` | Listener pending/live Pipe 상한 초과는 해당 OFFER/DIAL만 즉시 `RESOURCE_EXHAUSTED`로 끝내고 Relay, Listener, 기존 Pipe와 sibling Listener를 유지한다. |
 
 ## Pipe

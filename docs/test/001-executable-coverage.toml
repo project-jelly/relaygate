@@ -35,6 +35,8 @@ rust = [
   "session::tests::diagnostics::token_supply_recovers_before_first_publish_and_dial",
   "session::tests::diagnostics::relay_close_cancels_pending_dial_token_supply",
   "session::tests::diagnostics::cancelled_initial_listen_drops_token_supply",
+  "session::tests::diagnostics::cancelled_precommit_listen_allows_immediate_same_destination_relisten",
+  "session::tests::diagnostics::cancelled_committed_listen_reconnects_before_same_destination_relisten",
   "retry::tests::retries_share_one_deadline",
   "retry::tests::permanent_and_uncertain_failures_are_not_retried",
   "retry::tests::cancellation_interrupts_retry_backoff",
