@@ -122,9 +122,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while writing Pipe data",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while writing Pipe data"))),
             Poll::Ready(Ok(FrameCommit::Sent)) => Poll::Ready(Ok(count)),
             Poll::Ready(Ok(FrameCommit::Skipped)) => {
                 Poll::Ready(Err(state.write_error().unwrap_or_else(|| {
@@ -149,8 +149,7 @@ impl PipeWriter {
             return Poll::Ready(Err(error));
         }
         if state.terminal.borrow().is_some() || state.local_fin.load(Ordering::Acquire) {
-            self.outbound.cancel_wait();
-            return Poll::Ready(Ok(()));
+            return self.poll_flush(state, context);
         }
 
         match self.outbound.poll_send(context, || {
@@ -167,23 +166,20 @@ impl PipeWriter {
                 } else if state.terminal.borrow().is_some()
                     || state.local_fin.load(Ordering::Acquire)
                 {
-                    self.outbound.cancel_wait();
-                    Poll::Ready(Ok(()))
+                    self.poll_flush(state, context)
                 } else {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending FIN",
-            ))),
-            Poll::Ready(Ok(FrameCommit::Skipped)) => {
-                Poll::Ready(state.terminal_failure().map_or(Ok(()), Err))
-            }
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending FIN"))),
+            Poll::Ready(Ok(FrameCommit::Skipped)) => self.poll_flush(state, context),
             Poll::Ready(Ok(FrameCommit::Sent)) => {
                 if state.remote_fin.load(Ordering::Acquire) {
                     state.close_normal();
                 }
-                Poll::Ready(Ok(()))
+                self.poll_flush(state, context)
             }
         }
     }
@@ -212,9 +208,9 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending CLOSE",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending CLOSE"))),
             Poll::Ready(Ok(FrameCommit::Sent | FrameCommit::Skipped)) => Poll::Ready(Ok(())),
         }
     }
@@ -253,20 +249,20 @@ impl PipeWriter {
                     Poll::Pending
                 }
             }
-            Poll::Ready(Err(())) => Poll::Ready(Err(Error::maybe_observed(
-                "session ended while sending RESET",
-            ))),
+            Poll::Ready(Err(())) => Poll::Ready(Err(self
+                .outbound
+                .failure_error("session ended while sending RESET"))),
             Poll::Ready(Ok(FrameCommit::Sent | FrameCommit::Skipped)) => Poll::Ready(Ok(())),
         }
     }
 
-    fn poll_flush(&mut self, state: &PipeState) -> Poll<Result<()>> {
+    fn poll_flush(&mut self, state: &PipeState, context: &mut Context<'_>) -> Poll<Result<()>> {
+        state.write_waker.register(context.waker());
         if let Some(error) = state.terminal_failure() {
             self.outbound.cancel_wait();
             return Poll::Ready(Err(error));
         }
-        self.outbound.cancel_wait();
-        Poll::Ready(Ok(()))
+        self.outbound.poll_flush(context)
     }
 }
 
@@ -312,9 +308,9 @@ impl AsyncWrite for Pipe {
         map_io(pipe.writer.poll_write(&pipe.owner.state, context, payload))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         let pipe = self.get_mut();
-        map_io(pipe.writer.poll_flush(&pipe.owner.state))
+        map_io(pipe.writer.poll_flush(&pipe.owner.state, context))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -333,9 +329,9 @@ impl AsyncWrite for PipeWriteHalf {
         map_io(half.writer.poll_write(&half.owner.state, context, payload))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         let half = self.get_mut();
-        map_io(half.writer.poll_flush(&half.owner.state))
+        map_io(half.writer.poll_flush(&half.owner.state, context))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {

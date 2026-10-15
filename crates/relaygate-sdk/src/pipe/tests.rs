@@ -1,6 +1,14 @@
-use std::{future::Future, task::Poll};
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll},
+};
 
 use bytes::Bytes;
+use futures_util::task::{ArcWake, waker};
 use relaygate_protocol::{Frame, PipeId, SessionId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -8,12 +16,165 @@ use tokio::time::{Duration, timeout};
 
 use super::PipeState;
 use crate::{
-    Error, ErrorCode, PeerObservation, config::ResourceLimits, resource::RelayResources,
-    session::session_outbound_channel,
+    Error, ErrorCode, ErrorOrigin, PeerObservation,
+    config::ResourceLimits,
+    resource::RelayResources,
+    session::{OutboundItem, session_outbound_channel},
 };
 
 fn sdk_error(error: &std::io::Error) -> Result<&Error, &'static str> {
     Error::from_io(error).ok_or("Pipe I/O error lost its SDK Error payload")
+}
+
+#[derive(Default)]
+struct WakeCounter(AtomicUsize);
+
+impl ArcWake for WakeCounter {
+    fn wake_by_ref(counter: &Arc<Self>) {
+        counter.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[tokio::test]
+async fn pending_write_preserves_lane_failure_before_pipe_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (outbound, mut receiver) = session_outbound_channel(1);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 35);
+    let (mut pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+    pipe.write_all(b"fills queue").await?;
+
+    let wakes = Arc::new(WakeCounter::default());
+    let waker = waker(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let write = pipe.write_all(b"blocked write");
+    tokio::pin!(write);
+    assert!(write.as_mut().poll(&mut context).is_pending());
+
+    let failure = Error::new(
+        ErrorCode::ProtocolError,
+        PeerObservation::NotObserved,
+        "session writer rejected the frame",
+    )
+    .with_origin(ErrorOrigin::Transport);
+    receiver.fail(&failure);
+    assert!(state.terminal_failure().is_none());
+    assert!(wakes.0.load(Ordering::Relaxed) > 0);
+    let Poll::Ready(Err(error)) = write.as_mut().poll(&mut context) else {
+        return Err("blocked write did not fail when its lane closed".into());
+    };
+    assert_eq!(
+        sdk_error(&error)?,
+        &failure.with_observation(PeerObservation::MaybeObserved)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_shutdown_preserves_lane_failure_before_fin_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (outbound, mut receiver) = session_outbound_channel(1);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 36);
+    let (mut pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+    pipe.write_all(b"fills queue").await?;
+
+    let wakes = Arc::new(WakeCounter::default());
+    let waker = waker(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let shutdown = pipe.shutdown_write();
+    tokio::pin!(shutdown);
+    assert!(shutdown.as_mut().poll(&mut context).is_pending());
+    assert!(!state.local_fin.load(Ordering::Acquire));
+
+    let failure = Error::transport_deadline("session writer deadline expired");
+    receiver.fail(&failure);
+    assert!(state.terminal_failure().is_none());
+    assert!(wakes.0.load(Ordering::Relaxed) > 0);
+    assert_eq!(
+        shutdown.as_mut().poll(&mut context),
+        Poll::Ready(Err(failure.with_observation(PeerObservation::MaybeObserved)))
+    );
+    assert!(!state.local_fin.load(Ordering::Acquire));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_shutdown_reuses_fin_and_waits_for_writer_completion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (outbound, mut receiver) = session_outbound_channel(2);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 32);
+    let (mut pipe, _state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+
+    {
+        let shutdown = pipe.shutdown_write();
+        tokio::pin!(shutdown);
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+    }
+    assert_eq!(receiver.recv().await, Some(Frame::Fin { pipe_id }));
+    let Some(OutboundItem::Flush(completion)) = receiver.recv_item().await else {
+        return Err("shutdown did not enqueue a completion marker".into());
+    };
+    let shutdown = pipe.shutdown_write();
+    tokio::pin!(shutdown);
+    assert!(futures_util::poll!(&mut shutdown).is_pending());
+    assert!(
+        receiver.try_recv().is_err(),
+        "retry must not enqueue another FIN"
+    );
+    assert!(completion.send(Ok(())).is_ok());
+    shutdown.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_preserves_writer_failure_after_both_halves_close()
+-> Result<(), Box<dyn std::error::Error>> {
+    // FIN fills the queue, so the flush marker cannot be enqueued yet. The
+    // normally terminal Pipe cannot subsequently store a session failure.
+    let (outbound, mut receiver) = session_outbound_channel(1);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 33);
+    let (mut pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+    state.remote_fin();
+    let shutdown = pipe.shutdown_write();
+    tokio::pin!(shutdown);
+    assert!(futures_util::poll!(&mut shutdown).is_pending());
+    assert!(state.is_protocol_finished());
+    let failure = Error::transport_deadline("writer deadline");
+    receiver.fail(&failure);
+    assert_eq!(
+        shutdown.await,
+        Err(failure.with_observation(PeerObservation::MaybeObserved))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_failure_wakes_a_flush_waiting_for_writer_completion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (outbound, mut receiver) = session_outbound_channel(2);
+    let (abandoned, _abandoned_rx) = mpsc::unbounded_channel();
+    let pipe_id = PipeId::new(SessionId::new(), 34);
+    let (mut pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
+    pipe.write_all(b"pending").await?;
+    let wakes = Arc::new(WakeCounter::default());
+    let waker = waker(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    let flush = pipe.flush();
+    tokio::pin!(flush);
+    assert!(flush.as_mut().poll(&mut context).is_pending());
+    let failure = Error::transport_unavailable("remote session ended")
+        .with_observation(PeerObservation::MaybeObserved);
+    assert!(state.fail(failure.clone()));
+    assert!(wakes.0.load(Ordering::Relaxed) > 0);
+    let Poll::Ready(Err(error)) = flush.as_mut().poll(&mut context) else {
+        return Err("flush did not fail after its terminal state changed".into());
+    };
+    assert_eq!(sdk_error(&error)?, &failure);
+    receiver.fail(&failure);
+    Ok(())
 }
 
 #[tokio::test]
@@ -356,9 +517,19 @@ async fn async_shutdown_sends_one_fin_and_keeps_the_read_half_alive()
     let (pipe, state) = PipeState::pair(pipe_id, outbound, 1, abandoned);
     let (mut reader, mut writer) = pipe.into_split();
 
+    {
+        let shutdown = writer.shutdown();
+        tokio::pin!(shutdown);
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+        assert_eq!(outbound_rx.recv().await, Some(Frame::Fin { pipe_id }));
+        let Some(OutboundItem::Flush(completion)) = outbound_rx.recv_item().await else {
+            return Err("shutdown did not enqueue a completion marker".into());
+        };
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+        assert!(completion.send(Ok(())).is_ok());
+        shutdown.await?;
+    }
     writer.shutdown().await?;
-    writer.shutdown().await?;
-    assert_eq!(outbound_rx.recv().await, Some(Frame::Fin { pipe_id }));
     assert!(outbound_rx.try_recv().is_err());
 
     drop(writer);

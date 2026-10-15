@@ -152,6 +152,19 @@ let replacement = relay.listen(destination, replacement_source).await?;
 # }
 ```
 
+## Pipe I/O completion
+
+| Operation | Successful completion |
+| --- | --- |
+| `write` / `write_all` | DATA accepted by the bounded session queue. |
+| `flush` | Earlier DATA from this Pipe flushed by the local transport writer. |
+| `shutdown` / `shutdown_write` | Earlier DATA and one FIN flushed by the local transport writer; the read half stays open. |
+
+These operations do not acknowledge remote application receipt or processing.
+`Relay::close` stops the runtime immediately without draining queued data. Await
+`flush` or write shutdown first when local write completion is required; use an
+application response or acknowledgement when remote completion is required.
+
 ## Publish and accept Pipes
 
 `Relay::listen` waits for the initial Gateway-local binding. A returned

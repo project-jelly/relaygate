@@ -11,7 +11,7 @@ use crate::{Config, Error, ErrorCode, ErrorOrigin, PeerObservation, Result};
 
 mod outbound;
 
-pub(crate) use outbound::{FrameCommit, SessionOutbound, session_outbound_channel};
+pub(crate) use outbound::{FrameCommit, OutboundItem, SessionOutbound, session_outbound_channel};
 
 pub(crate) type WireTransport = Framed<BoxedIo, FrameCodec>;
 
