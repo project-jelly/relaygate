@@ -13,9 +13,10 @@ use relaygate_route_table::GatewayId;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::opened_local_stream;
+use super::{actor_for_open, opened_local_stream};
 use crate::{
     GatewayPeerConfig,
+    event::PeerEvent,
     frame::PeerFrame,
     identity::{
         OpenIdentity, PeerOpenProgress, PeerTransportId, RemoteStreamGuard, StreamEndpoint,
@@ -23,7 +24,7 @@ use crate::{
     },
     transport::{
         ActiveOpenSet, StreamCommand, TransportCloseReason, TransportClosure, TransportCommand,
-        state::TransportActor,
+        TransportNotice, state::TransportActor,
     },
 };
 
@@ -49,6 +50,91 @@ fn tracked_payload(drops: &Arc<AtomicUsize>) -> Bytes {
         bytes: [1],
         drops: Arc::clone(drops),
     })
+}
+
+#[tokio::test]
+async fn remote_close_discards_queued_data_and_releases_capacity_without_stalling_sibling()
+-> Result<(), Box<dyn Error>> {
+    let (mut actor, mut frames, mut notices, new_identity, request) = actor_for_open(1)?;
+    actor.config = actor.config.with_resource_limits(2, 4, 4, 1024 * 1024);
+    let identities = [
+        OpenIdentity::new(GatewayId::new(), SessionId::new(), 1),
+        OpenIdentity::new(GatewayId::new(), SessionId::new(), 2),
+    ];
+    let mut stream_ids = Vec::new();
+    for identity in identities {
+        let stream_id = actor.allocator.allocate()?;
+        assert!(actor.active_opens.reserve(identity)?);
+        actor
+            .streams
+            .insert(stream_id, opened_local_stream(identity)?);
+        stream_ids.push(stream_id);
+    }
+    actor.stream_count.store(2, Ordering::Relaxed);
+    assert!(actor.active_opens.reserve(new_identity)?);
+    let failure = actor
+        .open(request.clone())
+        .await
+        .err()
+        .ok_or("stream limit accepted OPEN")?;
+    assert_eq!(failure.code(), ErrorCode::ResourceExhausted);
+    assert!(!actor.active_opens.contains(new_identity));
+
+    actor
+        .aggregate_writer
+        .try_send(PeerFrame::Ping { nonce: 1 })?;
+    let drops = Arc::new(AtomicUsize::new(0));
+    for (stream_id, payload) in [
+        (stream_ids[0], tracked_payload(&drops)),
+        (stream_ids[1], Bytes::from_static(b"sibling")),
+    ] {
+        let (reply, result) = oneshot::channel();
+        actor
+            .handle_command(TransportCommand::Stream {
+                stream_id,
+                command: StreamCommand::Data { payload },
+                reply,
+            })
+            .await;
+        result.await??;
+    }
+    actor.flush_stream_queues().await;
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+    assert!(
+        actor
+            .handle_frame(PeerFrame::Close {
+                stream_id: stream_ids[0]
+            })
+            .await
+    );
+    assert!(
+        matches!(notices.try_recv()?, TransportNotice::Event(PeerEvent::Close { key }) if key.stream_id() == stream_ids[0])
+    );
+    assert!(
+        matches!(notices.try_recv()?, TransportNotice::StreamEnded { key, open_identity } if key.stream_id() == stream_ids[0] && open_identity == identities[0])
+    );
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert_eq!(actor.stream_count.load(Ordering::Relaxed), 1);
+    assert!(!actor.active_opens.contains(identities[0]));
+    assert!(actor.active_opens.contains(identities[1]));
+
+    assert!(matches!(frames.try_recv()?, PeerFrame::Ping { nonce: 1 }));
+    actor.flush_stream_queues().await;
+    assert!(
+        matches!(frames.try_recv()?, PeerFrame::Data { stream_id, payload } if stream_id == stream_ids[1] && payload == Bytes::from_static(b"sibling"))
+    );
+    assert!(frames.try_recv().is_err());
+    assert!(notices.try_recv().is_err());
+
+    assert!(actor.active_opens.reserve(new_identity)?);
+    let replacement = actor.open(request).await?;
+    assert!(
+        matches!(frames.try_recv()?, PeerFrame::Open { stream_id, open_identity, .. } if stream_id == replacement.stream_id() && open_identity == new_identity)
+    );
+    assert_eq!(actor.stream_count.load(Ordering::Relaxed), 2);
+    assert!(actor.active_opens.contains(new_identity));
+    Ok(())
 }
 
 #[tokio::test]
@@ -86,6 +172,7 @@ async fn saturated_stream_and_aggregate_buffers_are_released_on_transport_loss()
         allocator: StreamIdAllocator::new(StreamEndpoint::Dialer),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Acceptor),
         streams,
+        ready_streams: Default::default(),
         aggregate_writer,
         notices,
         active_opens,
