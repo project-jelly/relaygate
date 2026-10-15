@@ -161,3 +161,130 @@ fn data_debug_reports_only_payload_length() {
     assert!(rendered.contains("payload_len: 26"));
     assert!(!rendered.contains("payload-must-not-be-logged"));
 }
+
+#[test]
+fn data_wire_bytes_are_stable_and_append_after_existing_output() -> Result<(), ProtocolError> {
+    let session_id = SessionId::from_uuid(uuid::Uuid::from_bytes([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ]));
+    let frame = Frame::Data {
+        pipe_id: PipeId::new(session_id, 0x1122_3344_5566_7788),
+        payload: Bytes::from_static(&[0, 0x80, 0xfe, 0xff]),
+    };
+    let mut output = BytesMut::from(&[0xa5, 0x5a][..]);
+    FrameCodec::default().encode(frame, &mut output)?;
+
+    assert_eq!(
+        &output[..],
+        &[
+            0xa5, 0x5a, // Existing output.
+            b'R', b'G', 3, 15, 0, 0, 0, 28, // Header: 24-byte PipeId + 4 bytes DATA.
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77, 0x88, 0, 0x80, 0xfe, 0xff,
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_data_keeps_its_pipe_id_and_fits_the_exact_limit() -> Result<(), ProtocolError> {
+    let expected = Frame::Data {
+        pipe_id: PipeId::new(SessionId::new(), 42),
+        payload: Bytes::new(),
+    };
+    let mut codec = FrameCodec::new(24);
+    let mut output = BytesMut::new();
+    codec.encode(expected.clone(), &mut output)?;
+    assert_eq!(output.len(), 32);
+    assert_eq!(&output[..8], b"RG\x03\x0f\x00\x00\x00\x18");
+    assert_eq!(codec.decode(&mut output)?, Some(expected));
+    assert!(output.is_empty());
+    Ok(())
+}
+
+#[test]
+fn data_limit_includes_pipe_id_and_failure_preserves_output() -> Result<(), ProtocolError> {
+    let pipe_id = PipeId::new(SessionId::new(), 7);
+    for data_len in [0, 8, 65_536] {
+        let maximum = 24 + data_len;
+        let mut codec = FrameCodec::new(maximum);
+        let mut output = BytesMut::from(&b"existing output"[..]);
+        codec.encode(
+            Frame::Data {
+                pipe_id,
+                payload: Bytes::from(vec![0x5a; data_len]),
+            },
+            &mut output,
+        )?;
+        let before = output.to_vec();
+        let pointer = output.as_ptr();
+        let capacity = output.capacity();
+        let error = codec.encode(
+            Frame::Data {
+                pipe_id,
+                payload: Bytes::from(vec![0x5a; data_len + 1]),
+            },
+            &mut output,
+        );
+        assert!(matches!(
+            error,
+            Err(ProtocolError::FrameTooLarge { actual, maximum: limit })
+                if actual == maximum + 1 && limit == maximum
+        ));
+        assert_eq!(&output[..], &before);
+        assert_eq!(output.as_ptr(), pointer);
+        assert_eq!(output.capacity(), capacity);
+    }
+
+    let mut output = BytesMut::from(&b"unchanged"[..]);
+    let error = FrameCodec::new(23).encode(
+        Frame::Data {
+            pipe_id,
+            payload: Bytes::new(),
+        },
+        &mut output,
+    );
+    assert!(matches!(
+        error,
+        Err(ProtocolError::FrameTooLarge {
+            actual: 24,
+            maximum: 23
+        })
+    ));
+    assert_eq!(&output[..], b"unchanged");
+    Ok(())
+}
+
+#[test]
+fn concatenated_data_and_control_frames_decode_across_fragment_boundaries()
+-> Result<(), ProtocolError> {
+    let pipe_id = PipeId::new(SessionId::new(), 9);
+    let expected = vec![
+        Frame::Data {
+            pipe_id,
+            payload: Bytes::from_static(b"\0DATA\xff"),
+        },
+        Frame::Data {
+            pipe_id,
+            payload: Bytes::new(),
+        },
+        Frame::Fin { pipe_id },
+        Frame::Ping { nonce: 42 },
+    ];
+    let mut encoded = BytesMut::new();
+    let mut codec = FrameCodec::default();
+    for frame in &expected {
+        codec.encode(frame.clone(), &mut encoded)?;
+    }
+    let mut source = BytesMut::new();
+    let mut actual = Vec::new();
+    for chunk in encoded.chunks(3) {
+        source.extend_from_slice(chunk);
+        while let Some(frame) = codec.decode(&mut source)? {
+            actual.push(frame);
+        }
+    }
+    assert_eq!(actual, expected);
+    assert!(source.is_empty());
+    Ok(())
+}
