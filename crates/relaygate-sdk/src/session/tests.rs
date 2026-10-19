@@ -176,6 +176,47 @@ fn reconnect_backoff_uses_bounded_jitter_and_resets() {
     assert!((Duration::from_millis(66)..=initial).contains(&reset));
 }
 
+#[test]
+fn reconnect_backoff_preserves_submillisecond_bounds_and_reset() {
+    for (initial, maximum) in [
+        (Duration::from_nanos(1), Duration::from_nanos(1)),
+        (Duration::from_nanos(1), Duration::from_nanos(256)),
+        (Duration::from_nanos(999), Duration::from_nanos(1_999)),
+        (Duration::from_micros(100), Duration::from_micros(100)),
+        (Duration::from_micros(100), Duration::from_micros(400)),
+        (
+            Duration::from_nanos(999_999),
+            Duration::from_nanos(1_999_999),
+        ),
+        (Duration::from_millis(100), Duration::from_secs(5)),
+    ] {
+        // Fixed seeds include the minimum jitter path, so the 1ns case cannot
+        // accidentally round to zero. No wall-clock timing or random sampling.
+        for seed in [0, 1, u64::MAX] {
+            let mut backoff = ReconnectBackoff::new(initial, maximum);
+            backoff.entropy = seed;
+            let mut stage = initial;
+            for _ in 0..16 {
+                assert_eq!(backoff.current_delay(), stage);
+                let delay = backoff.next_delay();
+                assert!(!delay.is_zero());
+                assert!(delay <= stage);
+                assert!(delay <= maximum);
+                assert!(delay.as_nanos() >= stage.as_nanos() * 2 / 3);
+                stage = stage.saturating_mul(2).min(maximum);
+            }
+            assert_eq!(backoff.current_delay(), maximum);
+
+            backoff.reset();
+            assert_eq!(backoff.current_delay(), initial);
+            let reset = backoff.next_delay();
+            assert!(!reset.is_zero());
+            assert!(reset <= initial);
+            assert!(reset.as_nanos() >= initial.as_nanos() * 2 / 3);
+        }
+    }
+}
+
 #[tokio::test]
 async fn steady_state_data_frames_do_not_rescan_listener_settlement() -> TestResult {
     let listener = TcpListener::bind("127.0.0.1:0").await?;

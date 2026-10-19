@@ -312,7 +312,9 @@ fn duration_from_nanos(nanos: u128) -> Duration {
     } else {
         nanos % NANOS_PER_SECOND
     };
-    Duration::new(seconds as u64, subsecond_nanos as u32).max(Duration::from_millis(1))
+    // Nanosecond rounding must keep retries positive without exceeding a
+    // configured sub-millisecond maximum. Timer wakeup precision is separate.
+    Duration::new(seconds as u64, subsecond_nanos as u32).max(Duration::from_nanos(1))
 }
 
 #[cfg(test)]

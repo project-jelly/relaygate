@@ -64,6 +64,9 @@ AccessToken은 Entry Gateway에서 제거됩니다. RT Resolve와 peer OPEN에�
 
 현재 구현에서 local 후보는 Destination별 round-robin으로 선택하고 remote 후보는 첫 후보를 선택합니다. 후보 간 분산은 계약으로 보장하지 않습니다.
 
+Gateway 내부 control effect는 실행부터 결과 consumer의 수신까지 같은 bounded 슬롯을 점유합니다.
+결과 consumer는 후속 effect를 시작하기 전에 슬롯을 반환하며, 결과 전달 실패·취소·종료도 점유를 반환합니다.
+
 ## observation
 
 새 DIAL은 ConnectionId fence를 갱신한 뒤 [제어 요청 예산](010-transport-and-admission-contract.md#sdk-제어-요청-보호)과

@@ -44,7 +44,7 @@ impl PeerHandle {
     }
 
     /// Returns only after this OPEN is committed to the selected transport's
-    /// ordered writer queue. The returned oneshot and [`PeerEvents`] are
+    /// ordered writer queue. The returned oneshot and [`crate::PeerEvents`] are
     /// independent bounded channels, so a very fast `Opened`/`Failed` event may
     /// be scheduled before the caller observes this return value. Both paths
     /// carry the same [`PeerStreamKey`] and the Gateway state layer correlates

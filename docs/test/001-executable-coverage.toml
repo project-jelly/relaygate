@@ -55,6 +55,7 @@ rust = [
   "session::tests::returned_listener_republishes_after_unexpected_runtime_frame",
   "session::tests::permanent_republish_failure_settles_reconnect_episode_as_degraded",
   "session::tests::reconnect_backoff_uses_bounded_jitter_and_resets",
+  "session::tests::reconnect_backoff_preserves_submillisecond_bounds_and_reset",
   "listener::state::tests::repeated_republish_failures_share_one_bounded_retry_timer",
   "session::tests::pending_probe_requires_matching_pong",
 ]
@@ -173,6 +174,11 @@ rust = [
 id = "T-DIAL-01"
 status = "executable"
 rust = [
+  "gateway::effects::control_tests::paused_control_result_consumer_keeps_effects_within_capacity",
+  "gateway::effects::control_tests::capacity_one_route_result_releases_slot_before_peer_open",
+  "gateway::effects::control_tests::control_result_receiver_loss_returns_effect_capacity",
+  "gateway::effects::control_tests::shutdown_drops_queued_and_waiting_control_results",
+  "gateway::effects::control_tests::cancelled_resolve_releases_effect_capacity_without_result",
   "state::tests::duplicate_or_out_of_order_dial_identifiers_fail_without_creating_more_state",
   "state::tests::one_session_can_publish_and_dial_while_self_binding_is_excluded",
   "state::tests::accepted_pipe_relays_data_and_closes_without_residue",
@@ -271,6 +277,7 @@ rust = [
   "runtime_tests::plaintext_peer_accepts_without_a_key_allowlist",
   "transport_modes::internal_plaintext_does_not_disable_sdk_tls",
   "transport_modes::internal_transport_rejects_unknown_and_conflicting_modes_before_serving",
+  "transport_modes::distributed_gateway_rejects_non_unicode_peer_bind_before_serving",
   "transport_modes::explicit_plaintext_route_table_admits_without_keys_or_certificates",
   "config::transport::tests::internal_transport_defaults_secure_and_plaintext_requires_explicit_choice",
 ]

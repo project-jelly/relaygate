@@ -5,7 +5,7 @@ use std::{
 
 use relaygate_protocol::{BindingId, ErrorCode, PeerObservation, SessionId};
 use relaygate_route_table::{Destination, GatewayId, GatewayLocator};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
@@ -19,8 +19,24 @@ pub(super) struct ControlEffects {
     slots: Arc<Semaphore>,
     route_resolver: Arc<dyn RouteResolver>,
     tasks: TaskTracker,
-    results: mpsc::Sender<Vec<GatewayAction>>,
+    results: mpsc::Sender<ControlResult>,
     shutdown: CancellationToken,
+}
+
+/// Keeps both running effects and results awaiting consumption within the
+/// same admission bound. The consumer releases the slot before executing
+/// successor actions, so a capacity-one Resolve can start its peer OPEN.
+pub(super) struct ControlResult {
+    actions: Vec<GatewayAction>,
+    permit: OwnedSemaphorePermit,
+}
+
+impl ControlResult {
+    fn into_actions(self) -> Vec<GatewayAction> {
+        let Self { actions, permit } = self;
+        drop(permit);
+        actions
+    }
 }
 
 enum ControlAction {
@@ -45,7 +61,7 @@ impl ControlEffects {
     pub(super) fn new(
         capacity: usize,
         route_resolver: Arc<dyn RouteResolver>,
-        results: mpsc::Sender<Vec<GatewayAction>>,
+        results: mpsc::Sender<ControlResult>,
         shutdown: CancellationToken,
     ) -> Self {
         Self {
@@ -146,13 +162,12 @@ impl Inner {
         let shutdown = control.shutdown.clone();
         control.tasks.spawn(async move {
             let actions = inner.run_control_effect(route_resolver, peer, action).await;
-            drop(permit);
             if actions.is_empty() {
                 return;
             }
             tokio::select! {
                 _ = shutdown.cancelled() => {}
-                result = results.send(actions) => {
+                result = results.send(ControlResult { actions, permit }) => {
                     if result.is_err() && !shutdown.is_cancelled() {
                         tracing::warn!(
                             component = "gateway",
@@ -402,15 +417,15 @@ impl Inner {
 
     pub(super) async fn run_control_results(
         self: Arc<Self>,
-        mut results: mpsc::Receiver<Vec<GatewayAction>>,
+        mut results: mpsc::Receiver<ControlResult>,
         shutdown: CancellationToken,
     ) -> Result<(), crate::GatewayError> {
         loop {
-            let actions = tokio::select! {
+            let result = tokio::select! {
                 _ = shutdown.cancelled() => return Ok(()),
-                actions = results.recv() => actions,
+                result = results.recv() => result,
             };
-            let Some(actions) = actions else {
+            let Some(result) = result else {
                 if shutdown.is_cancelled() {
                     return Ok(());
                 }
@@ -418,7 +433,7 @@ impl Inner {
                     "distributed control result stream stopped unexpectedly".to_owned(),
                 ));
             };
-            self.execute_all(actions).await;
+            self.execute_all(result.into_actions()).await;
         }
     }
 
@@ -428,6 +443,9 @@ impl Inner {
         }
     }
 }
+
+#[cfg(test)]
+mod control_tests;
 
 fn batch_transport_lost_terminal_frames(actions: Vec<GatewayAction>) -> Vec<GatewayAction> {
     let mut indexes = HashMap::new();

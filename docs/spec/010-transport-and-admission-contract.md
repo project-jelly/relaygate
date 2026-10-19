@@ -155,7 +155,7 @@ DATA / PING / OFFER 응답 / UNPUBLISH / CANCEL / FIN / CLOSE / RESET -> 기존 
 | `RELAYGATE_RT_SHARD_DIRECTORY_PATH` | 없음(필수) | ShardDirectory JSON |
 | `RELAYGATE_GATEWAY_NAME` | 없음(필수) | logical Gateway 이름 |
 | `RELAYGATE_GATEWAY_LOCATOR` | 없음(필수) | peer가 접속할 주소 |
-| `RELAYGATE_PEER_BIND_ADDR` | `0.0.0.0:27421` | peer listener |
+| `RELAYGATE_PEER_BIND_ADDR` | `0.0.0.0:27421` | peer listener; 미설정일 때만 기본값 사용, 설정값의 인코딩 오류는 시작 실패 |
 | `RELAYGATE_PEER_HEARTBEAT_IDLE_MS` / `RELAYGATE_PEER_HEARTBEAT_TIMEOUT_MS` | 60000 / 20000 | peer transport liveness |
 | `RELAYGATE_PEER_IDLE_TIMEOUT_MS` | 300000 | stream 없는 peer transport retirement |
 
