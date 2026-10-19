@@ -144,7 +144,7 @@ impl AccessTokenSource {
     ///
     /// This is appropriate only when the application owns a token whose
     /// lifetime covers reconnect and Listener republish. For renewable tokens,
-    /// use [`Self::dynamic`].
+    /// use [`Self::dynamic_with_errors`].
     #[must_use]
     pub fn static_token(token: AccessToken) -> Self {
         Self(AccessTokenSourceInner::Static(token))

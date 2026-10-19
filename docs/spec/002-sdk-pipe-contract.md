@@ -60,7 +60,7 @@ async callback(action, Destination) -> PUBLISH 또는 DIAL
 | --- | --- |
 | `SDK-001` | `Relay::connect`는 지정 transport와 credential-free `HELLO/WELCOME` 완료 뒤 반환한다. |
 | `SDK-002` | network loss, heartbeat timeout과 bounded writer failure는 current session을 끝낸다. |
-| `SDK-003` | 실행 중 session loss는 bounded exponential backoff와 runtime별 jitter로 재연결한다. |
+| `SDK-003` | 실행 중 session loss는 bounded exponential backoff와 runtime별 jitter로 재연결한다. 계산한 지연은 양수이며 현재 단계와 설정한 최대값을 넘지 않는다. 실제 timer·scheduler의 실행 정밀도는 별도다. |
 | `SDK-004` | 새 session은 이미 반환된 live Listener를 새 AccessToken으로 자동 republish한다. |
 | `SDK-005` | recovery는 새 session·Binding을 만든다. existing Pipe, committed dial, payload와 PUBLISH가 commit된 initial listen은 terminal이다. PUBLISH pre-commit initial listen은 원래 deadline 안에서 재시도한다. |
 | `SDK-006` | 초기 config 오류와 Gateway 인증·권한 거절 또는 protocol 오류는 `Relay::connect`의 `Err`다. 초기 연결의 `NOT_OBSERVED` 일시 실패와 drain 중 `SESSION_REJECTED(UNAVAILABLE)`는 전체 `connect_timeout` 안에서 재시도하고, 예산 소진은 `DEADLINE_EXCEEDED`다. 실행 중 session·protocol·transport failure는 current session을 끝내고 bounded backoff 재연결로 수렴한다. |
