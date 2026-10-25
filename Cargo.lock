@@ -1268,7 +1268,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "relaygate-destination"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "serde",
  "serde_json",
@@ -1277,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-echo-listener"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "anyhow",
  "relaygate-sdk",
@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-echo-probe"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "anyhow",
  "relaygate-sdk",
@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway-peer"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-gateway-routing"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-protocol"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "bytes",
  "relaygate-destination",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-route-table"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "relaygate-destination",
  "serde",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-route-table-transport"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-sdk"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-server"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-test-contract"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "serde",
  "toml",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-token-issuer"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "jsonwebtoken",
  "p256",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "relaygate-transport"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "rcgen",
  "rustls",
