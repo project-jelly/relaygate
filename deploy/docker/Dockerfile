@@ -1,4 +1,4 @@
-FROM rust:1.96.1-bookworm AS builder
+FROM rust:1.98.1-bookworm AS builder
 
 RUN cargo install cargo-auditable --version 0.7.6 --locked
 
