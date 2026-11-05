@@ -18,30 +18,68 @@ with a private CA via `Config::with_ca_certificate`. `tcp://host:port`
 explicitly selects plaintext; it does not encrypt access tokens or Pipe data,
 and a TLS failure never falls back to plaintext.
 
-Every `listen` and `dial` supplies an application-issued operation token.
-RelayGate does not issue, refresh, or persist these credentials. Production
-applications should use `AccessTokenSource::dynamic` to fetch short-lived token
-material from their own backend. The helper below uses an environment variable
-only as a compileable stand-in for that backend boundary; do not hard-code raw
-tokens in source.
+Branch on `Error::code()` and `Error::origin()`, not message text:
 
-```no_run
-use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
-};
+| TLS failure (`ErrorOrigin::Transport`) | Code | Initial connect |
+| --- | --- | --- |
+| Certificate trust, name, validity, or peer certificate rejection | `Unauthenticated` | Return immediately |
+| TLS protocol or `relaygate/3` ALPN mismatch | `ProtocolError` | Return immediately |
+| Network I/O or unclassified TLS failure | `Unavailable` | Retry within connect timeout |
 
-async fn token_from_application_backend(
-    _request: AccessTokenRequest,
-) -> Result<AccessToken, AccessTokenSourceError> {
-    // Replace this stand-in with an authenticated call to your application backend.
-    let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-        .map_err(|_| AccessTokenSourceError)?;
-    AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
-}
+An existing Relay keeps reconnecting with backoff and exposes the latest failure
+through `last_error()`. A repaired server certificate can restore the session and
+Listeners under the existing trust. Changing SDK trust or client identity requires
+a new Config and Relay; certificate files are not automatically reloaded.
 
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
-# let _ = tokens;
-```
+Every `listen` and `dial` supplies an application-issued operation token. Create an
+`AccessTokenSource` with `AccessTokenSource::dynamic_with_errors(your_async_provider)`;
+`your_async_provider` is application code, not an SDK function.
+
+| Provider boundary | Contract |
+| --- | --- |
+| Input | `AccessTokenRequest` containing the action and exact Destination. |
+| Output | `Result<AccessToken, AccessTokenSourceFailure>`. |
+| Invocation | Initial operations and Listener republish; distinct operations may call concurrently. |
+| Ownership | The application/backend authenticates callers, authorizes grants, issues and refreshes tokens, and chooses any cache policy. |
+
+The [managed Listener example](https://github.com/project-jelly/relaygate/blob/main/crates/relaygate-sdk/examples/managed_listener.rs)
+uses a provider that rereads a token file on each request. The application/backend
+atomically replaces that file; the SDK does not issue or refresh JWTs.
+
+The backend adapter classifies failures by their meaning:
+
+| `AccessTokenSourceFailure` | Provider condition | SDK behavior |
+| --- | --- | --- |
+| `Unavailable` | Temporary network/backend failure or rate limit | Retry with backoff |
+| `Unauthenticated` | Application authentication must be restored | Return error / block returned Listener |
+| `PermissionDenied` | Permission to obtain the operation token was denied | Return error / block returned Listener |
+
+Existing `AccessTokenSource::dynamic` callbacks remain supported. Their
+`AccessTokenSourceError` always means a transient failure; use
+`dynamic_with_errors` to stop retrying authentication or permission failures.
+
+Map provider failures by meaning, not diagnostic text. Provider response bodies
+and credentials are not included in SDK errors. After repairing a permanent
+failure, close the blocked Listener and call `listen` with a replacement source.
+Sibling Listeners and the Relay remain usable.
+
+## Automatic recovery
+
+| Boundary | SDK behavior |
+| --- | --- |
+| Initial connection | Retry transient failures with backoff within one `connect_timeout`. |
+| Initial listen/dial token supply | Retry transient supplier failures within the original `operation_timeout`. |
+| Established session loss | Reconnect and republish returned Listeners using the existing managed backoff. |
+| Initial PUBLISH/DIAL result | Return the result; do not resend the wire operation automatically. |
+| Returned Listener republish | Retry transient supply/registration failures with the shared timer; permanent failures become `Blocked`. |
+| Gateway authentication/authorization rejection or uncertain operation | Return the error; do not replay. |
+| Established Pipe | Fail on session loss; never migrate or resend payloads. |
+
+`with_reconnect_backoff` also controls initial connection and token-supply retry
+spacing. The original deadline includes every attempt and wait. Dropping the
+call stops its retries; closing the Relay interrupts token supply and backoff.
+A provider may be called more than once after failures. One successful token
+supply is reused by the same dial call.
 
 ## Handling errors
 
@@ -52,7 +90,9 @@ is diagnostic text, not a value to match. `PeerObservation` remains separate;
 
 | Origin and code | Application response |
 | --- | --- |
-| `TokenSource` + `Unavailable`/`DeadlineExceeded` | Restore the application token provider; a returned Listener retries publication. Close it if application policy permanently revoked the grant. |
+| `TokenSource` + `Unavailable`/`DeadlineExceeded` | Restore the application token provider; a returned Listener retries publication. |
+| `TokenSource` + `Unauthenticated` | Restore application authentication; the SDK does not retry. A returned Listener becomes `Blocked`. |
+| `TokenSource` + `PermissionDenied` | Restore permission for the requested action and Destination; the SDK does not retry. A returned Listener becomes `Blocked`. |
 | `Gateway` + `Unauthenticated` | Issue a valid operation JWT; check profile, key, claims, and expiry. |
 | `Gateway` + `PermissionDenied` | Check the token's action, Namespace, Destination scope, and permission count. |
 | `Gateway` + `Internal` | Check Gateway diagnostics; internal RouteTable/peer admission authentication failures cannot be repaired by refreshing an application JWT. |
@@ -74,149 +114,153 @@ An initial `SessionRejected` has `NotObserved` metadata because no session was
 admitted. `Unavailable` and `ResourceExhausted` permit a new connection attempt
 after backoff. A committed DIAL remains `MaybeObserved` when its result is lost.
 
-## Publish and accept Pipes
-
-`Relay::listen` waits for the initial Gateway-local binding. A returned
-`Listener` is active and remains desired while the SDK reconnects. Status
-subscriptions coalesce changes, so observers receive the latest state rather
-than an audit log of every transition. `last_error()` returns the current
-registration failure or the latest Relay session/reconnect failure. The session
-cause is recorded before `Reconnecting`; subsequent failed attempts replace it.
-Relay recovery and close clear its error. A Listener clears its error when a new
-PUBLISH is committed, registration becomes active, or it is closed.
-Relay status changes do not notify observers for every failed reconnect attempt,
-so read `Relay::last_error()` when inspecting a reconnecting Relay.
+For a blocked Listener, read its error before closing it. Restore application
+access first, then replace only that Listener:
 
 ```no_run
-use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
-    Config, Destination, ListenerStatus, Relay, RelayStatus,
-};
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use relaygate_sdk::{AccessTokenSource, ErrorCode, ErrorOrigin, Listener, Relay};
 
-# async fn token_from_application_backend(
-#     _request: AccessTokenRequest,
-# ) -> Result<AccessToken, AccessTokenSourceError> {
-#     let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-#         .map_err(|_| AccessTokenSourceError)?;
-#     AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
-# }
-# async fn provider() -> Result<(), Box<dyn std::error::Error>> {
-let relay = Relay::connect(Config::new("relaygate.example.com:443")?).await?;
-let mut relay_status = relay.subscribe_status();
-assert_eq!(relay_status.current(), RelayStatus::Active);
-let relay_observer = tokio::spawn(async move {
-    while let Some(status) = relay_status.changed().await {
-        eprintln!("Relay status: {status:?}");
-        if status == RelayStatus::Closed {
-            break;
-        }
+# async fn replace_blocked(
+#     relay: &Relay, blocked: &Listener, destination: relaygate_sdk::Destination,
+#     replacement_source: AccessTokenSource,
+# ) -> Result<Listener, Box<dyn std::error::Error>> {
+let error = blocked.last_error().ok_or("no registration error")?;
+match (error.origin(), error.code()) {
+    (ErrorOrigin::TokenSource, ErrorCode::Unauthenticated) => {
+        // Restore application authentication before providing replacement_source.
     }
-});
-
-let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
-let listener = Arc::new(relay.listen(destination, tokens).await?);
-let observed_listener = Arc::clone(&listener);
-let mut listener_status = listener.subscribe_status();
-assert_eq!(listener_status.current(), ListenerStatus::Active);
-let listener_observer = tokio::spawn(async move {
-    while let Some(status) = listener_status.changed().await {
-        eprintln!("Listener status: {status:?}");
-        if matches!(status, ListenerStatus::Suspended | ListenerStatus::Blocked) {
-            if let Some(error) = observed_listener.last_error() {
-                eprintln!("Listener registration error: {:?}/{:?}", error.origin(), error.code());
-            }
-        }
-        if status == ListenerStatus::Closed {
-            break;
-        }
+    (ErrorOrigin::TokenSource, ErrorCode::PermissionDenied) => {
+        // Restore permission for this action and Destination first.
     }
-});
-
-let mut pipe = listener.accept().await?;
-let mut request = [0_u8; 4096];
-let received = pipe.read(&mut request).await?;
-pipe.write_all(&request[..received]).await?;
-pipe.shutdown_write().await?;
-
-listener.close().await?;
-relay.close();
-let _ = listener_observer.await;
-let _ = relay_observer.await;
-# Ok(())
+    _ => return Err(error.into()),
+}
+blocked.close().await?;
+let replacement = relay.listen(destination, replacement_source).await?;
+# Ok(replacement)
 # }
 ```
+
+## Pipe I/O completion
+
+| Operation | Successful completion |
+| --- | --- |
+| `write` / `write_all` | DATA accepted by the bounded session queue. |
+| `flush` | Earlier DATA from this Pipe flushed by the local transport writer. |
+| `shutdown` / `shutdown_write` | Earlier DATA and one FIN flushed by the local transport writer; the read half stays open. |
+
+These operations do not acknowledge remote application receipt or processing.
+`Relay::close` stops the runtime immediately without draining queued data. Await
+`flush` or write shutdown first when local write completion is required; use an
+application response or acknowledgement when remote completion is required.
+
+`Pipe::reset` and `PipeWriteHalf::reset` accept messages up to 65,535 UTF-8 bytes.
+Longer messages return `Sdk` / `InvalidArgument` before changing an open Pipe or
+queuing a frame. Resetting an already terminal Pipe remains a successful no-op.
+
+## Readiness and cancellation
+
+| Observation | Meaning |
+| --- | --- |
+| `Relay::connect` / `Relay::wait_ready` success | The current transport session is ready; Listener republish may still be pending. |
+| `Relay::listen` success / Listener `Active` | The current Gateway-local binding is ready. |
+| `status()` / subscription `current()` | A snapshot; a disconnect can happen immediately afterward. |
+| subscription `changed()` | A newer, coalesced snapshot; intermediate transitions may be skipped. |
+
+`current()` consumes the current subscription version, so the next `changed()`
+waits for a newer one. `wait_ready()` has no built-in deadline; wrap it in
+`tokio::time::timeout` when needed. `accept()` waits through transient recovery;
+a blocked or closed Listener returns an error.
+
+`last_error()` is the latest failure, not a history. Relay errors clear on recovery
+or close; Listener errors clear on a new PUBLISH commit, successful registration,
+or close. Status notifications do not report every failed reconnect attempt.
+
+| Cancellation or close | Application responsibility |
+| --- | --- |
+| Drop a connect/listen/dial future, including through `select!` or timeout | Stops local waiting and retries; a committed operation may already have been observed remotely. |
+| Interrupt `write_all` | Some bytes may already be accepted; do not retry the entire payload automatically. |
+| `Listener::close` | Stops new and unaccepted Pipes; already accepted Pipes remain usable. |
+| Drain then `Relay::close` | Stop accepting, allow active Pipe tasks to finish within an application deadline, then stop the runtime. `Relay::close` itself does not drain. |
+
+## Publish and accept Pipes
+
+The application supplies `tokens` from its provider. This example echoes one Pipe;
+the managed Listener example adds status observation, Ctrl-C, and bounded task shutdown.
+
+```no_run
+use relaygate_sdk::{AccessTokenSource, Config, Destination, Relay};
+use tokio::io::{AsyncWriteExt, copy};
+
+async fn serve_one(
+    config: Config,
+    destination: Destination,
+    tokens: AccessTokenSource,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let relay = Relay::connect(config).await?;
+    let listener = relay.listen(destination, tokens).await?;
+    eprintln!("Relay: {:?}, Listener: {:?}", relay.status(), listener.status());
+
+    let (mut reader, mut writer) = listener.accept().await?.into_split();
+    copy(&mut reader, &mut writer).await?;
+    writer.shutdown().await?;
+    listener.close().await?;
+    relay.close();
+    Ok(())
+}
+```
+
+From a repository checkout, run the complete example with a backend-issued
+publish token for `RELAYGATE_DESTINATION`:
+
+```sh
+RELAYGATE_ADDR=relaygate.example.com:443 \
+RELAYGATE_DESTINATION=examples/echo \
+RELAYGATE_PUBLISH_TOKEN_FILE=/run/secrets/publish.jwt \
+cargo run -p relaygate-sdk --example managed_listener
+```
+
+Set `RELAYGATE_CA_FILE` for a private CA. The existing Compose echo examples use
+static tokens as topology fixtures; a static source does not refresh an expired token.
 
 ## Dial a destination
 
-`Relay::dial` opens one new opaque byte-stream `Pipe`. A committed dial and
-Pipe payloads are never replayed by the SDK. After a session interruption,
-`dial` waits for a new session within its operation deadline. `wait_ready`
-can be used separately when an application needs transport readiness; it does
-not wait for Listener registration and has no built-in deadline.
+`dial` waits for a session within its operation deadline and opens one new Pipe.
+Committed operations and Pipe payloads are never replayed by the SDK. This example
+uses write shutdown to delimit a request, then reads the application's response.
 
 ```no_run
-use relaygate_sdk::{
-    AccessToken, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
-    Config, Destination, Error, Relay, RelayStatus,
-};
+use relaygate_sdk::{AccessTokenSource, Config, Destination, Error, Relay};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-# async fn token_from_application_backend(
-#     _request: AccessTokenRequest,
-# ) -> Result<AccessToken, AccessTokenSourceError> {
-#     let raw = std::env::var("RELAYGATE_ACCESS_TOKEN")
-#         .map_err(|_| AccessTokenSourceError)?;
-#     AccessToken::new(raw).map_err(|_| AccessTokenSourceError)
-# }
-# async fn dialer() -> Result<(), Box<dyn std::error::Error>> {
-let relay = Relay::connect(Config::new("relaygate.example.com:443")?).await?;
-let mut statuses = relay.subscribe_status();
-assert_eq!(statuses.current(), RelayStatus::Active);
-let observer = tokio::spawn(async move {
-    while let Some(status) = statuses.changed().await {
-        eprintln!("Relay status: {status:?}");
-        if status == RelayStatus::Closed {
-            break;
-        }
-    }
-});
+async fn dial_once(
+    config: Config,
+    destination: Destination,
+    tokens: AccessTokenSource,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let relay = Relay::connect(config).await?;
+    let mut pipe = relay.dial(destination, tokens).await?;
+    pipe.write_all(b"transcribe this audio").await?;
+    pipe.shutdown_write().await?;
 
-let destination: Destination = "inference/stt.seoul".parse()?;
-let tokens = AccessTokenSource::dynamic(token_from_application_backend);
-let mut pipe = relay.dial(destination, tokens).await?;
-pipe.write_all(b"transcribe this audio").await?;
-pipe.shutdown_write().await?;
-
-let mut response = [0_u8; 4096];
-loop {
-    match pipe.read(&mut response).await {
-        Ok(0) => break,
-        Ok(received) => {
-            // Process `&response[..received]` according to the application protocol.
-        }
-        Err(error) => {
-            // `Pipe` implements Tokio's `AsyncRead`/`AsyncWrite`; the structured SDK
-            // error stays recoverable from the `std::io::Error` payload.
-            if let Some(sdk_error) = Error::from_io(&error) {
-                eprintln!("dial pipe failed: {:?}", sdk_error.code());
+    let mut response = [0_u8; 4096];
+    loop {
+        match pipe.read(&mut response).await {
+            Ok(0) => break,
+            Ok(received) => {
+                // Process `&response[..received]` using the application protocol.
             }
-            return Err(error.into());
+            Err(error) => {
+                if let Some(sdk_error) = Error::from_io(&error) {
+                    eprintln!("Pipe: {:?}/{:?}", sdk_error.origin(), sdk_error.code());
+                }
+                return Err(error.into());
+            }
         }
     }
+    relay.close();
+    Ok(())
 }
-relay.close();
-let _ = observer.await;
-# Ok(())
-# }
 ```
-
-`RelayStatusSubscription::current` and
-`ListenerStatusSubscription::current` consume the current watch version. The
-next `changed` call therefore waits for a newer state. A `None` result from
-`changed` means the owning Relay or Listener runtime has terminated.
 
 ## License
 

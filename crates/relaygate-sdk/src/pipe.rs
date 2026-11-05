@@ -73,6 +73,9 @@ struct BufferedChunk {
 
 /// One ordered, opaque, bidirectional byte stream.
 ///
+/// Writes enqueue DATA; [`tokio::io::AsyncWriteExt::flush`] waits for the local
+/// transport writer to flush it. Neither operation confirms remote receipt.
+///
 /// I/O errors do not report payload delivery. Do not use their
 /// [`Error::is_retryable`] hint to replay bytes on this or a replacement Pipe.
 pub struct Pipe {
@@ -417,7 +420,8 @@ impl Pipe {
         )
     }
 
-    /// Gracefully closes only this endpoint's write direction.
+    /// Flushes queued DATA and FIN through the local transport writer, closing
+    /// only this endpoint's write direction. Does not confirm remote receipt.
     pub async fn shutdown_write(&mut self) -> Result<()> {
         self.writer.shutdown_write(&self.owner.state).await
     }
@@ -428,6 +432,10 @@ impl Pipe {
     }
 
     /// Fails both directions. Repeated calls are safe.
+    ///
+    /// On an open Pipe, messages exceeding 65,535 UTF-8 bytes return
+    /// [`ErrorCode::InvalidArgument`] without changing the Pipe or sending a RESET.
+    /// An already terminal Pipe returns success without validating the message.
     pub async fn reset(&mut self, code: ErrorCode, message: impl Into<String>) -> Result<()> {
         self.writer
             .reset(&self.owner.state, code, message.into())
