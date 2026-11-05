@@ -14,7 +14,14 @@ RUN cargo auditable build --locked --release \
     --bin relaygate-echo-listener \
     --bin relaygate-echo-probe
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e AS server-runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e AS runtime-libs
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67 AS server-runtime
+
+COPY --from=runtime-libs /usr/lib/*-linux-gnu/libgcc_s.so.1 /usr/lib/
+COPY --from=runtime-libs /var/lib/dpkg/status.d/libgcc-s1 /var/lib/dpkg/status.d/libgcc-s1
+COPY --from=runtime-libs /var/lib/dpkg/status.d/gcc-14-base /var/lib/dpkg/status.d/gcc-14-base
+COPY --from=runtime-libs /usr/share/doc/gcc-14-base /usr/share/doc/gcc-14-base
 
 WORKDIR /
 
