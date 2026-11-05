@@ -65,7 +65,7 @@ helm upgrade --install relaygate deploy/helm/relaygate \
 | SDK Service | `ClusterIP`; 필요 시 `LoadBalancer` |
 | 외부 L4 | platform passthrough, Gateway에서 TLS 종료 |
 | 데이터 | memory-only, persistent volume 없음 |
-| runtime | Distroless `cc-debian13`, UID/GID `10001:10001`, read-only root filesystem; shell 없음 |
+| runtime | Distroless `base-nossl-debian13` with libgcc, UID/GID `10001:10001`, read-only root filesystem; shell 없음 |
 
 internal plaintext는 내부 인증·암호화·Secret mount만 제거한다. SDK edge TLS와 PUBLISH/DIAL token 검증은 유지한다.
 Gateway startup/readiness는 `relaygate-server check`로 TLS·`relaygate/3` ALPN·`HELLO/WELCOME`을 검사한다.
@@ -102,6 +102,14 @@ routeTable:
 
 `annotations`: StatefulSet metadata. `podAnnotations`: Pod template. Secret 갱신 watch와 ArgoCD의 controller 변경 필드 보존은 GitOps가 설정한다.
 실행 가능한 platform override 예시는 [Kind fixture](../../../tests/kind/cert-manager-values.yaml)에 있다.
+
+## 이미지 고정
+
+`gateway.image.tag`와 `routeTable.image.tag`는 태그 뒤에 선택적으로
+`@sha256:<digest>`를 붙일 수 있다. 이때 배포 이미지는 `repository:tag@sha256:...`으로
+렌더링되며 digest로 고정된다. 멀티 아키텍처 배포에는 검증된 OCI index digest를
+사용한다. 차트는 digest 형식만 검사하므로 이미지 버전을 바꿀 때는 해당 버전의
+서명과 digest 매핑을 확인해 함께 갱신한다.
 
 ## 변경 계약
 

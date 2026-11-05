@@ -112,5 +112,40 @@ class TransportTests(unittest.TestCase):
                     self.assertIn("cannot override chart-managed variable", result.stderr)
 
 
+class ImageReferenceTests(unittest.TestCase):
+    def test_tags_and_digest_pins_render_for_each_component(self):
+        default = render()
+        self.assertEqual(default.returncode, 0, default.stderr)
+        for component, repository in (
+            ("gateway", "relaygate-gateway"),
+            ("route-table", "relaygate-route-table"),
+        ):
+            self.assertRegex(workload(default.stdout, component), rf'image: "ghcr\.io/project-jelly/{repository}:[^"@]+"')
+
+        gateway_digest = "a" * 64
+        route_digest = "b" * 64
+        pinned = render(
+            f"gateway.image.tag=0.5.13@sha256:{gateway_digest}",
+            f"routeTable.image.tag=0.5.11@sha256:{route_digest}",
+        )
+        self.assertEqual(pinned.returncode, 0, pinned.stderr)
+        self.assertIn(
+            f'image: "ghcr.io/project-jelly/relaygate-gateway:0.5.13@sha256:{gateway_digest}"',
+            workload(pinned.stdout, "gateway"),
+        )
+        self.assertIn(
+            f'image: "ghcr.io/project-jelly/relaygate-route-table:0.5.11@sha256:{route_digest}"',
+            workload(pinned.stdout, "route-table"),
+        )
+
+    def test_rejects_invalid_image_digests(self):
+        for component in ("gateway", "routeTable"):
+            for suffix in ("@sha256:abcd", "@sha256:" + "A" * 64, "@sha512:" + "a" * 64, "@sha256:" + "g" * 64):
+                with self.subTest(component=component, suffix=suffix):
+                    result = render(f"{component}.image.tag=1.2.3{suffix}")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"{component}.image.tag", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
