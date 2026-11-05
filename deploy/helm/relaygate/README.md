@@ -65,7 +65,7 @@ helm upgrade --install relaygate deploy/helm/relaygate \
 | SDK Service | `ClusterIP`; 필요 시 `LoadBalancer` |
 | 외부 L4 | platform passthrough, Gateway에서 TLS 종료 |
 | 데이터 | memory-only, persistent volume 없음 |
-| runtime | Distroless `base-nossl-debian13` with libgcc, UID/GID `10001:10001`, read-only root filesystem; shell 없음 |
+| runtime | Distroless, UID/GID `10001:10001`, read-only root filesystem; shell 없음 |
 
 internal plaintext는 내부 인증·암호화·Secret mount만 제거한다. SDK edge TLS와 PUBLISH/DIAL token 검증은 유지한다.
 Gateway startup/readiness는 `relaygate-server check`로 TLS·`relaygate/3` ALPN·`HELLO/WELCOME`을 검사한다.
