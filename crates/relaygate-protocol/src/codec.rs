@@ -10,6 +10,7 @@ use crate::{
 const MAGIC: [u8; 2] = *b"RG";
 const VERSION: u8 = 3;
 const HEADER_LEN: usize = 8;
+const PIPE_ID_WIRE_LEN: usize = 24;
 const MAX_STRING_LEN: usize = u16::MAX as usize;
 /// HELLO carries no credential or payload; PUBLISH and DIAL carry authorization.
 pub const MAX_HELLO_FRAME_LEN: usize = 0;
@@ -43,6 +44,37 @@ impl Encoder<Frame> for FrameCodec {
     type Error = ProtocolError;
 
     fn encode(&mut self, item: Frame, destination: &mut BytesMut) -> Result<(), Self::Error> {
+        if let Frame::Data { pipe_id, payload } = item {
+            let payload_len = PIPE_ID_WIRE_LEN
+                .checked_add(payload.len())
+                .ok_or(ProtocolError::LengthOverflow)?;
+            if payload_len > self.max_frame_len {
+                return Err(ProtocolError::FrameTooLarge {
+                    actual: payload_len,
+                    maximum: self.max_frame_len,
+                });
+            }
+            let payload_len_wire =
+                u32::try_from(payload_len).map_err(|_| ProtocolError::LengthOverflow)?;
+            let frame_len = HEADER_LEN
+                .checked_add(payload_len)
+                .ok_or(ProtocolError::LengthOverflow)?;
+            let _ = destination
+                .len()
+                .checked_add(frame_len)
+                .ok_or(ProtocolError::LengthOverflow)?;
+
+            // Validate before touching the output; DATA needs no temporary payload buffer.
+            destination.reserve(frame_len);
+            destination.extend_from_slice(&MAGIC);
+            destination.put_u8(VERSION);
+            destination.put_u8(15);
+            destination.put_u32(payload_len_wire);
+            put_pipe_id(destination, pipe_id);
+            destination.extend_from_slice(&payload);
+            return Ok(());
+        }
+
         let mut payload = BytesMut::new();
         let kind = encode_payload(item, &mut payload)?;
         if payload.len() > self.max_frame_len {

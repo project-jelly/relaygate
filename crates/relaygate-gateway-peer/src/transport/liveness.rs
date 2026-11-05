@@ -125,12 +125,8 @@ impl TransportLiveness {
             }
             return None;
         }
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.deadline <= now)
-        {
-            return Some(LivenessAction::HeartbeatTimeout);
+        if let Some(pending) = &self.pending {
+            return (pending.deadline <= now).then_some(LivenessAction::HeartbeatTimeout);
         }
         if self.last_inbound + self.heartbeat_idle_interval > now {
             return None;
@@ -321,6 +317,53 @@ mod tests {
 
         assert!(liveness.on_deadline(Instant::now(), false, true).is_none());
         assert!(liveness.pending.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn earlier_open_deadline_preserves_pending_probe_and_matching_pong() {
+        let mut liveness = liveness();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(matches!(
+            liveness.on_deadline(Instant::now(), false, true),
+            Some(LivenessAction::Ping(PeerFrame::Ping { nonce: 1 }))
+        ));
+        liveness.mark_probe_committed();
+        let original_deadline = liveness.next_deadline();
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(liveness.on_deadline(Instant::now(), false, true).is_none());
+        assert_eq!(liveness.next_deadline(), original_deadline);
+        assert_eq!(liveness.pending.as_ref().map(|probe| probe.nonce), Some(1));
+        assert!(
+            liveness
+                .observe_inbound(&PeerFrame::Pong { nonce: 1 })
+                .is_some()
+        );
+        assert!(liveness.pending.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_open_deadlines_do_not_extend_pending_probe_timeout() {
+        let mut liveness = liveness();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(matches!(
+            liveness.on_deadline(Instant::now(), false, true),
+            Some(LivenessAction::Ping(PeerFrame::Ping { nonce: 1 }))
+        ));
+        liveness.mark_probe_committed();
+        let original_deadline = liveness.next_deadline();
+
+        for _ in 0..3 {
+            tokio::time::advance(Duration::from_secs(5)).await;
+            assert!(liveness.on_deadline(Instant::now(), false, true).is_none());
+            assert_eq!(liveness.next_deadline(), original_deadline);
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(Some(Instant::now()), original_deadline);
+        assert!(matches!(
+            liveness.on_deadline(Instant::now(), false, true),
+            Some(LivenessAction::HeartbeatTimeout)
+        ));
     }
 
     #[test]

@@ -54,6 +54,8 @@ pub struct RouteTableShard {
     registration_index: HashMap<RegistrationKey, RegistrationState>,
     active_lease_ids: HashSet<LeaseId>,
     expiry_index: BTreeMap<Instant, BTreeSet<ExpiryKey>>,
+    binding_count: usize,
+    expiry_record_count: usize,
 }
 
 impl RouteTableShard {
@@ -75,6 +77,8 @@ impl RouteTableShard {
             registration_index: HashMap::new(),
             active_lease_ids: HashSet::new(),
             expiry_index: BTreeMap::new(),
+            binding_count: 0,
+            expiry_record_count: 0,
         })
     }
 
@@ -92,13 +96,9 @@ impl RouteTableShard {
     pub fn stats(&self) -> RouteTableStats {
         RouteTableStats {
             registration_count: self.registration_index.len(),
-            binding_count: self
-                .registration_index
-                .values()
-                .map(|registration| registration.bindings.len())
-                .sum(),
+            binding_count: self.binding_count,
             destination_count: self.destination_index.len(),
-            expiry_record_count: self.expiry_index.values().map(BTreeSet::len).sum(),
+            expiry_record_count: self.expiry_record_count,
         }
     }
 
@@ -177,6 +177,8 @@ impl RouteTableShard {
         Self::validate_current_binding_identity_stability(registration, &snapshot)?;
 
         let old_bindings = std::mem::replace(&mut registration.bindings, snapshot.into_map());
+        self.binding_count -= old_bindings.len();
+        self.binding_count += registration.bindings.len();
         registration.revision = Some(revision);
         let deadline = registration.deadline;
         Self::remove_bindings(&mut self.destination_index, &old_bindings);
@@ -285,6 +287,7 @@ impl RouteTableShard {
             let Some((_, candidates)) = self.expiry_index.pop_first() else {
                 break;
             };
+            self.expiry_record_count -= candidates.len();
             for candidate in candidates {
                 let is_current = self
                     .registration_index
@@ -438,13 +441,17 @@ impl RouteTableShard {
     }
 
     fn insert_expiry(&mut self, key: &RegistrationKey, lease_id: LeaseId, deadline: Instant) {
-        self.expiry_index
+        if self
+            .expiry_index
             .entry(deadline)
             .or_default()
             .insert(ExpiryKey {
                 registration_key: key.clone(),
                 lease_id,
-            });
+            })
+        {
+            self.expiry_record_count += 1;
+        }
     }
 
     fn remove_expiry(&mut self, key: &RegistrationKey, lease_id: LeaseId, deadline: Instant) {
@@ -453,7 +460,9 @@ impl RouteTableShard {
             lease_id,
         };
         let remove_bucket = if let Some(bucket) = self.expiry_index.get_mut(&deadline) {
-            bucket.remove(&expiry_key);
+            if bucket.remove(&expiry_key) {
+                self.expiry_record_count -= 1;
+            }
             bucket.is_empty()
         } else {
             false
@@ -467,6 +476,7 @@ impl RouteTableShard {
         let Some(registration) = self.registration_index.remove(key) else {
             return;
         };
+        self.binding_count -= registration.bindings.len();
         self.active_lease_ids.remove(&registration.lease_id);
         self.remove_expiry(key, registration.lease_id, registration.deadline);
         Self::remove_bindings(&mut self.destination_index, &registration.bindings);
@@ -502,3 +512,6 @@ impl RouteTableShard {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

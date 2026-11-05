@@ -139,6 +139,7 @@ async fn duplicate_fin_and_data_after_fin_are_stream_scoped() -> Result<(), Box<
         allocator: StreamIdAllocator::new(StreamEndpoint::Dialer),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Acceptor),
         streams,
+        ready_streams: Default::default(),
         aggregate_writer,
         notices: notice_writer,
         active_opens,

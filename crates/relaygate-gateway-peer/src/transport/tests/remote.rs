@@ -71,6 +71,7 @@ fn actor_for_remote_open() -> Result<RemoteActor, Box<dyn Error>> {
         allocator: StreamIdAllocator::new(StreamEndpoint::Acceptor),
         remote_guard: RemoteStreamGuard::new(StreamEndpoint::Dialer),
         streams: BTreeMap::new(),
+        ready_streams: Default::default(),
         aggregate_writer,
         notices,
         active_opens: Arc::new(ActiveOpenSet::default()),

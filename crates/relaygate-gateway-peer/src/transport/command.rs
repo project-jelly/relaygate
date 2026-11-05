@@ -148,6 +148,8 @@ impl TransportActor {
         })?;
         enqueue_stream_frame(
             stream,
+            &mut self.ready_streams,
+            stream_id,
             queue_capacity,
             PeerFrame::Opened { stream_id },
             false,
@@ -181,7 +183,14 @@ impl TransportActor {
             observation: failure.observation(),
             message: failure.message().to_owned(),
         };
-        if let Err(error) = enqueue_stream_frame(stream, queue_capacity, frame, true) {
+        if let Err(error) = enqueue_stream_frame(
+            stream,
+            &mut self.ready_streams,
+            stream_id,
+            queue_capacity,
+            frame,
+            true,
+        ) {
             self.fail_transport(TransportCloseReason::WriterFailed);
             return Err(error);
         }
@@ -210,6 +219,8 @@ impl TransportActor {
         })?;
         enqueue_stream_frame(
             stream,
+            &mut self.ready_streams,
+            stream_id,
             queue_capacity,
             PeerFrame::Data { stream_id, payload },
             false,
@@ -237,6 +248,8 @@ impl TransportActor {
         let terminal = relay.is_closed();
         enqueue_stream_frame(
             stream,
+            &mut self.ready_streams,
+            stream_id,
             queue_capacity,
             PeerFrame::Fin { stream_id },
             terminal,
@@ -262,9 +275,14 @@ impl TransportActor {
                 )
                 .await;
         }
-        if let Err(error) =
-            enqueue_stream_frame(stream, queue_capacity, PeerFrame::Close { stream_id }, true)
-        {
+        if let Err(error) = enqueue_stream_frame(
+            stream,
+            &mut self.ready_streams,
+            stream_id,
+            queue_capacity,
+            PeerFrame::Close { stream_id },
+            true,
+        ) {
             self.fail_transport(TransportCloseReason::WriterFailed);
             return Err(error);
         }
@@ -286,6 +304,8 @@ impl TransportActor {
         }
         if let Err(error) = enqueue_stream_frame(
             stream,
+            &mut self.ready_streams,
+            stream_id,
             queue_capacity,
             PeerFrame::Reset {
                 stream_id,

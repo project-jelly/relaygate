@@ -13,6 +13,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector, client, server};
 
+mod error;
+pub use error::TlsErrorKind;
+
 const ALPN_PROTOCOL: &[u8] = b"relaygate/3";
 
 /// Object-safe asynchronous byte stream accepted by RelayGate protocol code.
@@ -231,7 +234,7 @@ fn require_relaygate_alpn(negotiated: Option<&[u8]>) -> Result<(), io::Error> {
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
-        "TLS peer did not negotiate the relaygate/3 ALPN protocol",
+        error::AlpnMismatch,
     ))
 }
 

@@ -11,19 +11,19 @@ failure입니다.
 | code | 대표 조건 | 새 operation 조건 |
 | --- | --- | --- |
 | `INVALID_ARGUMENT` | Destination/config/frame 오류 | 입력 변경 |
-| `UNAUTHENTICATED` | access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 | 새 유효 token/config |
-| `PERMISSION_DENIED` | 유효한 token에 요청 action·exact Destination 권한 없음 | 권한이 맞는 새 token |
+| `UNAUTHENTICATED` | TLS 인증서 검증 또는 access token 형식·서명·alg·kid·issuer·audience·time claim 검증 실패 또는 token source 재인증 요구 | 유효한 TLS 인증서·trust/config, token 또는 application 인증 복구 |
+| `PERMISSION_DENIED` | 유효한 token에 요청 action·exact Destination 권한 없음 또는 token source 권한 거절 | grant 또는 application 권한 복구 |
 | `NOT_FOUND` | current Binding 없음 | 상태 변경 |
 | `FAILED_PRECONDITION` | self Binding만 존재, closed object | 전제 변경 |
 | `UNAVAILABLE` | drain, dependency/transport/token source loss | backoff |
 | `DEADLINE_EXCEEDED` | operation·authorization bounded deadline 만료 | observation 확인 |
 | `RESOURCE_EXHAUSTED` | session/binding/Pipe/dial/queue/frame/authorization 상한, PUBLISH/DIAL rate 예산 | 부하 감소·budget refill 뒤 새 operation |
 | `CANCELLED` | owner operation/session 종료 | caller 결정 |
-| `PROTOCOL_ERROR` | version, frame order·ownership 위반 | 구현/config 수정 |
+| `PROTOCOL_ERROR` | TLS/ALPN 불일치, version, frame order·ownership 위반 | 구현/config 수정 |
 | `INTERNAL` | internal invariant/lock/task failure, Gateway 내부 dependency 인증·권한 실패 | 내부 설정·진단 확인 |
 | `ALREADY_EXISTS` | 같은 Relay·Destination Listener 중복 | 기존 Listener 종료 |
 
-`UNAUTHENTICATED`와 `PERMISSION_DENIED`는 해당 PUBLISH/DIAL만 거절하고 RelaySession을 인증 주체로
+Gateway가 반환한 `UNAUTHENTICATED`와 `PERMISSION_DENIED`는 해당 PUBLISH/DIAL만 거절하고 RelaySession을 인증 주체로
 승격하지 않습니다. 이 두 인증 실패의 DIAL observation은 `NOT_OBSERVED`입니다.
 
 SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 주체를 보장하지 않습니다. `message()`는 진단용이며 분기 조건이 아닙니다.
@@ -31,7 +31,7 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 | origin | 조건 | application 대응 |
 | --- | --- | --- |
 | `Sdk` | 로컬 입력·상태·자원 처리 | code에 따라 입력·부하·lifecycle 확인 |
-| `TokenSource` | application token 공급 실패·deadline | token backend 복구; 영구적 정책 변경이면 Listener 종료 |
+| `TokenSource` | application token 공급 실패·deadline | 일시 장애는 backoff; 인증·권한 실패는 application 조치 후 새 operation/Listener |
 | `Transport` | TCP·TLS·HELLO/WELCOME·session loss | endpoint·TLS 설정 또는 Gateway 연결 확인 |
 | `Gateway` | Gateway 실패 응답 | `UNAUTHENTICATED`는 JWT profile·key·claims·expiry, `PERMISSION_DENIED`는 grant 확인 |
 
@@ -41,7 +41,15 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 | 경로 | code / origin / observation |
 | --- | --- |
+| SDK outbound capacity 범위 초과·0 | `INVALID_ARGUMENT` / `Sdk` / `NOT_OBSERVED`; 연결 전 거절 |
+| 열린 Pipe의 reset message 65,535 bytes 초과 | `INVALID_ARGUMENT` / `Sdk` / `NOT_OBSERVED`; Pipe·session 상태와 전송 queue 유지 |
+| TLS 인증서 검증·peer certificate alert | `UNAUTHENTICATED` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
+| TLS protocol·ALPN 불일치 | `PROTOCOL_ERROR` / `Transport` / `NOT_OBSERVED` (연결 수립 중) |
+| initial connect 전체 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED`; 계측은 `error/deadline_exceeded` |
 | initial `SESSION_REJECTED` | Gateway 응답 code / `Gateway` / `NOT_OBSERVED` |
+| token source 일시 실패 | `UNAVAILABLE` / `TokenSource` / `NOT_OBSERVED` |
+| token source 재인증 요구 | `UNAUTHENTICATED` / `TokenSource` / `NOT_OBSERVED` |
+| token source 권한 거절 | `PERMISSION_DENIED` / `TokenSource` / `NOT_OBSERVED` |
 | `PUBLISH/DIAL` token source deadline | `DEADLINE_EXCEEDED` / `TokenSource` / `NOT_OBSERVED` |
 | session 대기 deadline | `DEADLINE_EXCEEDED` / `Transport` / `NOT_OBSERVED` |
 | committed `PUBLISH/DIAL` 응답 deadline | `DEADLINE_EXCEEDED` / `Transport` / `MAYBE_OBSERVED` |
@@ -52,6 +60,17 @@ SDK `Error::origin()`은 code와 독립적인 관측 경계이며 최종 원인 
 
 `PUBLISHED` 처리 중에도 `ACTIVE` 전이와 commit 표시 제거는 같은 상태 lock에서 수행합니다.
 그 전에 initial deadline이 먼저 종료하면 `MAYBE_OBSERVED`를 유지합니다.
+
+초기 connect와 initial listen/dial의 token 공급은 `NOT_OBSERVED` 일시 오류를 기존 deadline 안에서 자동 재시도합니다.
+전체 deadline은 시도마다 갱신하지 않으며, 시간 소진은 해당 origin의 `DEADLINE_EXCEEDED`입니다.
+초기 TLS 인증서·protocol/ALPN 실패는 즉시 반환하며 message 문자열로 분류하지 않습니다. TLS 1.3의
+handshake 직후 HELLO/WELCOME I/O에 도착한 certificate alert도 동일하게 분류합니다. 일반 I/O·미분류 TLS 실패는
+`UNAVAILABLE`을 유지합니다. 이미 반환된 Relay는 인증서 오류에도 `RECONNECTING`에서 backoff를 계속하며
+`last_error()`로 원인을 노출합니다. 서버 인증서 복구 시 기존 trust로 검증한 뒤 재연결·Listener republish를 수행합니다.
+SDK trust/client identity 변경은 새 Config와 Relay를 요구하며 자동 reload하지 않습니다.
+Gateway의 initial PUBLISH/DIAL 실패 응답은 기존대로 caller에 반환합니다.
+`dynamic_with_errors`의 인증·권한 실패는 재시도하지 않습니다. 기존 `dynamic`의 실패는 일시 실패로 유지합니다.
+TokenSource 메시지는 action과 조치 안내만 포함하며 backend 응답·credential을 복사하지 않습니다.
 
 Session 종료 원인은 Relay `RECONNECTING` 통지 전 기록하고 영향을 받는 작업에도 전달합니다. 자동 reconnect와
 Listener republish 여부는 lifecycle이 결정하며, `Error::is_retryable()`은 caller의 새 control operation을 위한
@@ -76,8 +95,9 @@ stateDiagram-v2
         REGISTERING --> ACTIVE: Binding confirmed
         REGISTERING --> CLOSED: Relay::listen Err / close
         REGISTERING --> SUSPENDED: returned Listener transient failure/session loss
-        REGISTERING --> BLOCKED: returned Listener permanent PUBLISH failure
+        REGISTERING --> BLOCKED: returned Listener permanent registration failure
         ACTIVE --> SUSPENDED: session loss
+        SUSPENDED --> BLOCKED: token source authentication/permission failure
         SUSPENDED --> REGISTERING: bounded republish retry
         ACTIVE --> CLOSED: close
         SUSPENDED --> CLOSED: close
@@ -94,7 +114,7 @@ Session reconnect는 Listener identity와 AccessTokenSource를 유지하고 새 
 초기 config·transport·handshake 실패는 `Relay::connect`의 `Err`입니다. 실행 중 session·protocol·transport
 failure는 current session을 끝내고 bounded backoff 재연결을 계속합니다. 늦은 old-session
 `PUBLISHED/OFFER`는 current state를 유지하며 `REMOVED` Binding은 terminal입니다. Gateway의 initial
-PUBLISH 실패 응답은 `Relay::listen`의 `Err`이고, 이미 반환된 Listener의 영구적인 PUBLISH 실패는 Listener만
+PUBLISH 실패 응답은 `Relay::listen`의 `Err`이고, 이미 반환된 Listener의 token source 인증·권한 실패와 영구적인 PUBLISH 실패는 Listener만
 `BLOCKED`로 만듭니다.
 Public status subscription은 SDK 소유 wrapper로 latest-state/coalescing 의미를 가집니다. `current()`는
 현재 값을 반환하고 subscription cursor를 소비하며, `changed()`는 그 이후 변경에서 latest state를 반환합니다.
@@ -145,6 +165,16 @@ Authorization은 operation admission으로 끝납니다. COMMITTED 뒤 token·cl
 보관하지 않습니다. `HALF_CLOSED`는 별도 wire/state enum이 아니라 `OPEN` Pipe의 방향별 finished flag 중
 하나만 설정된 논리 상태입니다.
 
+| SDK Pipe 작업 | 성공 경계 | 상태 의미 |
+| --- | --- | --- |
+| `write`/`write_all` | bounded session queue의 DATA 수락 | local transport write 완료 전일 수 있음 |
+| `flush` | 해당 Pipe의 앞선 DATA에 대한 local transport flush 완료 | FIN 없이 write half 유지 |
+| `shutdown`/`shutdown_write` | 열린 Pipe의 앞선 DATA와 단일 FIN에 대한 local transport flush 완료 | write half 종료, read half 유지 |
+
+이 완료 경계는 상대 Gateway·application의 수신 또는 처리 확인이 아닙니다. Writer 실패·session 종료는 기존
+오류 code·origin을 유지하며 `AsyncWrite` 오류는 `Error::from_io`로 조회합니다. `Relay::close`는 즉시 runtime을
+종료하며 pending DATA·FIN을 drain하지 않습니다.
+
 ## RouteTable registration 상태
 
 ```mermaid
@@ -188,7 +218,8 @@ session 상한은 `RESOURCE_EXHAUSTED`)은 handshake 예산 안에서 `SESSION_R
 | --- | --- | --- | --- |
 | SDK–GW loss | session 소유 Pipe/dial/Binding | 다른 session·Binding | reconnect + Listener republish |
 | drain 중 HELLO | 해당 socket(`SESSION_REJECTED/UNAVAILABLE`) | 기존 session·Binding·Pipe | SDK backoff 재연결 |
-| token source 실패 | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | application source 회복; returned Listener는 재공급 시도 |
+| token source 일시 실패·deadline | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | backoff; initial은 원래 deadline, returned Listener는 재공급 시도 |
+| token source 인증·권한 실패 | initial은 즉시 Err; returned Listener는 `BLOCKED` | session·sibling Binding·Pipe | 인증·권한 복구 후 새 operation; blocked Listener close 후 재생성 |
 | token 인증·권한 실패 | 해당 PUBLISH/DIAL; returned Listener는 `BLOCKED` | session·기존 sibling Binding·Pipe | application이 새 token/source로 새 operation 구성 |
 | authorization capacity/deadline | 해당 PUBLISH/DIAL | session·기존 Binding·Pipe | 부하 감소 뒤 새 operation |
 | OFFER uncertain | selected RelaySession | sibling session·Binding | reconnect; caller 새 dial |
@@ -196,10 +227,13 @@ session 상한은 `RESOURCE_EXHAUSTED`)은 handshake 예산 안에서 `SESSION_R
 | PUBLISH/DIAL rate 초과 | 해당 요청, DIAL은 `NOT_OBSERVED` | session·기존 Binding·Pipe, 정리 메시지 | budget refill 뒤 새 operation; DIAL은 새 ConnectionId |
 | SDK Listener/Relay Pipe 상한 | 해당 OFFER/DIAL | RelaySession·Listener·기존/sibling Pipe | 기존 Pipe 종료 뒤 새 dial |
 | SDK Pipe/Relay inbound buffer 상한 | 해당 Pipe | RelaySession·Listener·sibling Pipe | application 소비 속도·상한 조정 뒤 새 Pipe |
-| GW–GW loss | 해당 transport의 stream/Pipe | local Binding·다른 transport | 다음 dial이 transport 생성 |
+| GW–GW loss·heartbeat timeout | 해당 transport의 stream/Pipe | local Binding·다른 transport | 다음 dial이 transport 생성 |
 | GW–RT loss | remote resolve·sync | local Binding·established Pipe | worker reconnect + snapshot |
 | RT restart | 해당 shard lease·BindingProjection | Gateway local Binding·Pipe | Gateway 재등록 |
 | GW drain | 신규 admission 후 deadline의 owned state | 다른 GW·RT state | SDK/peer reconnect |
+
+Peer PING 응답 대기 중 다른 OPEN deadline이 만료되어도 기존 nonce와 response deadline은 유지합니다.
+Matching PONG 없이 response deadline이 지나면 해당 transport를 종료합니다.
 
 ## 불변 조건
 

@@ -1,5 +1,6 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    ops::Bound::{Excluded, Unbounded},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -47,6 +48,7 @@ pub(super) struct TransportActor {
     pub(super) allocator: StreamIdAllocator,
     pub(super) remote_guard: RemoteStreamGuard,
     pub(super) streams: BTreeMap<StreamId, RuntimeStream>,
+    pub(super) ready_streams: BTreeSet<StreamId>,
     pub(super) aggregate_writer: mpsc::Sender<PeerFrame>,
     pub(super) notices: mpsc::Sender<TransportNotice>,
     pub(super) active_opens: Arc<ActiveOpenSet>,
@@ -78,6 +80,7 @@ impl TransportActor {
             allocator: StreamIdAllocator::new(local_endpoint),
             remote_guard: RemoteStreamGuard::new(remote_endpoint),
             streams: BTreeMap::new(),
+            ready_streams: BTreeSet::new(),
             aggregate_writer,
             notices,
             active_opens,
@@ -136,7 +139,16 @@ impl TransportActor {
                 code: ErrorCode::DeadlineExceeded,
                 message: "peer OPEN response timed out".to_owned(),
             };
-            if enqueue_stream_frame(stream, queue_capacity, reset, true).is_err() {
+            if enqueue_stream_frame(
+                stream,
+                &mut self.ready_streams,
+                stream_id,
+                queue_capacity,
+                reset,
+                true,
+            )
+            .is_err()
+            {
                 self.fail_transport(TransportCloseReason::WriterFailed);
                 return;
             }
@@ -158,19 +170,31 @@ impl TransportActor {
             let mut moved = false;
             let mut blocked = false;
             let mut finished = Vec::new();
-            let stream_ids: Vec<StreamId> = self.streams.keys().copied().collect();
-            for stream_id in stream_ids {
+            // One frame per nonempty stream in ascending order, as in the full-map pass.
+            let mut lower_bound = Unbounded;
+            while let Some(stream_id) = self
+                .ready_streams
+                .range((lower_bound, Unbounded))
+                .next()
+                .copied()
+            {
+                lower_bound = Excluded(stream_id);
                 let Some(stream) = self.streams.get_mut(&stream_id) else {
+                    self.ready_streams.remove(&stream_id);
                     continue;
                 };
                 let Some(frame) = stream.queued_frames.pop_front() else {
+                    self.ready_streams.remove(&stream_id);
                     continue;
                 };
                 match self.aggregate_writer.try_send(frame) {
                     Ok(()) => {
                         moved = true;
-                        if stream.terminal_queued && stream.queued_frames.is_empty() {
-                            finished.push(stream_id);
+                        if stream.queued_frames.is_empty() {
+                            self.ready_streams.remove(&stream_id);
+                            if stream.terminal_queued {
+                                finished.push(stream_id);
+                            }
                         }
                     }
                     Err(mpsc::error::TrySendError::Full(frame)) => {
@@ -179,6 +203,9 @@ impl TransportActor {
                         break;
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
+                        if stream.queued_frames.is_empty() {
+                            self.ready_streams.remove(&stream_id);
+                        }
                         self.fail_transport(TransportCloseReason::WriterFailed);
                         return;
                     }
@@ -205,6 +232,7 @@ impl TransportActor {
     }
 
     pub(super) async fn finish_stream(&mut self, stream_id: StreamId) {
+        self.ready_streams.remove(&stream_id);
         let Some(stream) = self.streams.remove(&stream_id) else {
             return;
         };
@@ -224,6 +252,7 @@ impl TransportActor {
     }
 
     pub(super) fn drain_losses(&mut self) -> Vec<LostPeerStream> {
+        self.ready_streams.clear();
         let streams = std::mem::take(&mut self.streams);
         let count = streams.len();
         let mut losses = Vec::with_capacity(count);
@@ -250,6 +279,8 @@ impl TransportActor {
 
 pub(super) fn enqueue_stream_frame(
     stream: &mut RuntimeStream,
+    ready_streams: &mut BTreeSet<StreamId>,
+    stream_id: StreamId,
     queue_capacity: usize,
     frame: PeerFrame,
     terminal: bool,
@@ -272,6 +303,7 @@ pub(super) fn enqueue_stream_frame(
         ));
     }
     stream.queued_frames.push_back(frame);
+    ready_streams.insert(stream_id);
     stream.terminal_queued = terminal;
     if terminal {
         stream.open_deadline = None;

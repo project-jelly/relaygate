@@ -3,11 +3,12 @@ use std::time::Duration;
 use relaygate_destination::{Destination, DestinationName, Namespace};
 use relaygate_protocol::{BearerToken, FrameCodec, MAX_BEARER_TOKEN_BYTES};
 use relaygate_sdk::{
-    AccessAction, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError, Config, Listener,
-    ListenerStatus, Relay, RelayStatus, ResourceLimits,
+    AccessAction, AccessTokenRequest, AccessTokenSource, AccessTokenSourceError,
+    AccessTokenSourceFailure, Config, Error, ErrorOrigin, Listener, ListenerStatus, Relay,
+    RelayStatus, ResourceLimits,
 };
 use relaygate_token_issuer::{Action, Permission, TokenIssuer};
-use relaygate_transport::{ClientTlsConfig, ServerTlsConfig};
+use relaygate_transport::{ClientTlsConfig, ServerTlsConfig, TlsErrorKind};
 
 pub fn public_api_smoke() -> Result<(), Box<dyn std::error::Error>> {
     let namespace: Namespace = "example".parse()?;
@@ -20,6 +21,13 @@ pub fn public_api_smoke() -> Result<(), Box<dyn std::error::Error>> {
         destination: destination.clone(),
     };
     let _source = AccessTokenSource::dynamic(|_| async { Err(AccessTokenSourceError) });
+    let _classified_source = AccessTokenSource::dynamic_with_errors(|_| async {
+        Err(AccessTokenSourceFailure::Unauthenticated)
+    });
+    let _: fn(&Error) -> ErrorOrigin = Error::origin;
+    let io = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+    assert!(Error::from_io(&io).is_none());
+    assert!(TlsErrorKind::from_io(&io).is_none());
     let _codec = FrameCodec::default();
     let _token_limit = MAX_BEARER_TOKEN_BYTES;
     let _token = BearerToken::new("fixture-token")?;
@@ -41,6 +49,7 @@ pub async fn status_api_compile_only(
     listener: &Listener,
 ) -> relaygate_sdk::Result<()> {
     let _: RelayStatus = relay.status();
+    let _: Option<Error> = relay.last_error();
     let mut relay_status = relay.subscribe_status();
     let _: RelayStatus = relay_status.current();
     let _: Option<RelayStatus> = relay_status.changed().await;
@@ -62,9 +71,7 @@ pub async fn application_flow_compile_only(
     tokens: AccessTokenSource,
 ) -> relaygate_sdk::Result<()> {
     let relay = Relay::connect(config).await?;
-    let listener = relay
-        .listen(published_destination, tokens.clone())
-        .await?;
+    let listener = relay.listen(published_destination, tokens.clone()).await?;
     let mut pipe = relay.dial(dialed_destination, tokens).await?;
 
     pipe.close().await?;

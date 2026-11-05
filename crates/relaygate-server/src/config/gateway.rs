@@ -231,8 +231,8 @@ fn distributed_from_env(transport: InternalTransport) -> Result<Option<Distribut
         )?);
     }
     Ok(Some(DistributedGatewayConfig {
-        peer_bind_address: env::var("RELAYGATE_PEER_BIND_ADDR")
-            .unwrap_or_else(|_| DEFAULT_PEER_BIND_ADDRESS.to_owned()),
+        peer_bind_address: optional_env("RELAYGATE_PEER_BIND_ADDR")?
+            .unwrap_or_else(|| DEFAULT_PEER_BIND_ADDRESS.to_owned()),
         routing,
         peer,
         insecure_transport: insecure,

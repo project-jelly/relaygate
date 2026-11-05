@@ -58,7 +58,7 @@ accept -> rate budget -> transport + handshake slot -> TLS(5s) -> HELLO/response
 | 경계 | 규칙 |
 | --- | --- |
 | 256 기본값 | 보호 상한; 처리량 보장 아님 |
-| 초기 `Relay::connect` | 단일 시도; admission 거절 뒤 재시도는 application 결정 |
+| 초기 `Relay::connect` | 전체 `connect_timeout` 내 일시 실패 재시도; TLS 인증서·protocol 오류는 즉시 반환 |
 | managed reconnect | SDK backoff로 분산 |
 | readiness 조회·기존 session | budget 소비 없음·유지 |
 | rate budget | 실패·종료 시 반환하지 않음; 시간으로만 refill; t초 통과 수 ≤ `burst + rate * t` |
@@ -155,7 +155,7 @@ DATA / PING / OFFER 응답 / UNPUBLISH / CANCEL / FIN / CLOSE / RESET -> 기존 
 | `RELAYGATE_RT_SHARD_DIRECTORY_PATH` | 없음(필수) | ShardDirectory JSON |
 | `RELAYGATE_GATEWAY_NAME` | 없음(필수) | logical Gateway 이름 |
 | `RELAYGATE_GATEWAY_LOCATOR` | 없음(필수) | peer가 접속할 주소 |
-| `RELAYGATE_PEER_BIND_ADDR` | `0.0.0.0:27421` | peer listener |
+| `RELAYGATE_PEER_BIND_ADDR` | `0.0.0.0:27421` | peer listener; 미설정일 때만 기본값 사용, 설정값의 인코딩 오류는 시작 실패 |
 | `RELAYGATE_PEER_HEARTBEAT_IDLE_MS` / `RELAYGATE_PEER_HEARTBEAT_TIMEOUT_MS` | 60000 / 20000 | peer transport liveness |
 | `RELAYGATE_PEER_IDLE_TIMEOUT_MS` | 300000 | stream 없는 peer transport retirement |
 
