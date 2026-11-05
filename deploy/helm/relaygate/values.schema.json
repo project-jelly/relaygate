@@ -368,7 +368,7 @@
         },
         "tag": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?$"
         },
         "pullPolicy": {
           "type": "string",
