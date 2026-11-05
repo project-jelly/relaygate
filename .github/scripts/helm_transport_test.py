@@ -144,7 +144,7 @@ class ImageReferenceTests(unittest.TestCase):
                 with self.subTest(component=component, suffix=suffix):
                     result = render(f"{component}.image.tag=1.2.3{suffix}")
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(f"{component}.image.tag", result.stderr)
+                    self.assertRegex(result.stderr, rf"({component}\.image\.tag|/{component}/image/tag)")
 
 
 if __name__ == "__main__":
