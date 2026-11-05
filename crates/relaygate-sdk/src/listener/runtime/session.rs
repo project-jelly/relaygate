@@ -22,7 +22,7 @@ use crate::{
     listener::{RelayCommand, RelayInner},
     observability::ReconnectEpisode,
     session::{
-        EstablishedSession, SessionHeartbeat, SessionLink, SessionOutbound,
+        EstablishedSession, OutboundItem, SessionHeartbeat, SessionLink, SessionOutbound,
         session_outbound_channel, wait_for_heartbeat,
     },
 };
@@ -102,9 +102,17 @@ pub(super) async fn run_relay_session(
                     None => Continue(()),
                 }
             }
-            frame = outbound_rx.recv() => {
-                let Some(frame) = frame else { break Error::closed(); };
-                session.on_outbound(frame).await
+            item = outbound_rx.recv_item() => {
+                let Some(item) = item else { break Error::closed(); };
+                match item {
+                    OutboundItem::Frame(frame) => session.on_outbound(frame).await,
+                    OutboundItem::Flush(response) => {
+                        // Each preceding frame's send_bounded includes transport
+                        // flush. This marker never goes onto the wire.
+                        let _ = response.send(Ok(()));
+                        Continue(())
+                    }
+                }
             }
             abandoned = abandoned_rx.recv() => {
                 match abandoned {
@@ -119,6 +127,7 @@ pub(super) async fn run_relay_session(
     };
 
     inner.set_relay_error(Some(failure.clone()));
+    outbound_rx.fail(&failure);
     fail_queued_dials(&mut commands, &failure);
     cleanup_relay_session(
         session.established.id,

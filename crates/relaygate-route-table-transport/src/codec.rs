@@ -21,8 +21,8 @@ pub(crate) enum CodecError {
     FrameTooLarge { actual: usize, maximum: usize },
     #[error("RouteTable frame length cannot be represented on the wire")]
     LengthOverflow,
-    #[error("invalid RouteTable frame payload: {0}")]
-    InvalidPayload(serde_json::Error),
+    #[error("invalid RouteTable frame payload")]
+    InvalidPayload,
 }
 
 impl CodecError {
@@ -50,7 +50,7 @@ impl FrameCodec {
                 actual: counter.exceeded_at.unwrap_or(self.max_frame_len),
                 maximum: self.max_frame_len,
             }),
-            Err(error) => Err(CodecError::InvalidPayload(error)),
+            Err(_) => Err(CodecError::InvalidPayload),
         }
     }
 
@@ -104,7 +104,7 @@ impl Encoder<WireFrame> for FrameCodec {
     type Error = CodecError;
 
     fn encode(&mut self, frame: WireFrame, destination: &mut BytesMut) -> Result<(), Self::Error> {
-        let payload = serde_json::to_vec(&frame).map_err(CodecError::InvalidPayload)?;
+        let payload = serde_json::to_vec(&frame).map_err(|_| CodecError::InvalidPayload)?;
         self.validate_payload_len(payload.len())?;
         let payload_len = u32::try_from(payload.len()).map_err(|_| CodecError::LengthOverflow)?;
         destination.reserve(HEADER_LEN + payload.len());
@@ -150,7 +150,7 @@ impl Decoder for FrameCodec {
         let payload = source.split_to(payload_len);
         serde_json::from_slice(&payload)
             .map(Some)
-            .map_err(CodecError::InvalidPayload)
+            .map_err(|_| CodecError::InvalidPayload)
     }
 }
 
@@ -197,6 +197,53 @@ mod tests {
             decoded,
             Some(WireFrame::Welcome { role }) if role == ROUTE_TABLE_ROLE
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_payload_errors_do_not_expose_input() -> Result<(), Box<dyn std::error::Error>> {
+        let marker = "RT_PRIVATE_INPUT_DO_NOT_LOG";
+        let payloads = [
+            format!(r#"{{"frame":"{marker}"}}"#),
+            format!(r#"{{"frame":"WELCOME","role":"route_table","{marker}":true}}"#),
+            format!(r#"{{"frame":"REQUEST","role":"gateway","request_id":"{marker}"}}"#),
+        ];
+        let mappers: [fn(CodecError) -> TransportError; 2] =
+            [map_receive_codec_error, map_send_codec_error];
+
+        for payload in payloads {
+            let parser_error = serde_json::from_str::<WireFrame>(&payload)
+                .err()
+                .ok_or("invalid payload was accepted")?;
+            assert!(parser_error.to_string().contains(marker));
+
+            let mut bytes = BytesMut::new();
+            bytes.extend_from_slice(&MAGIC);
+            bytes.put_u8(VERSION);
+            bytes.put_u32(u32::try_from(payload.len())?);
+            bytes.extend_from_slice(payload.as_bytes());
+
+            let mut codec = FrameCodec::new(1024);
+            let error = codec
+                .decode(&mut bytes.clone())
+                .err()
+                .ok_or("invalid frame was accepted")?;
+            assert!(!format!("{error:?}").contains(marker));
+            assert_eq!(error.to_string(), "invalid RouteTable frame payload");
+            assert!(std::error::Error::source(&error).is_none());
+
+            for map_error in mappers {
+                let error = codec
+                    .decode(&mut bytes.clone())
+                    .err()
+                    .ok_or("invalid frame was accepted")?;
+                let error = map_error(error);
+                assert_eq!(error.code(), crate::ErrorCode::ProtocolError);
+                assert_eq!(error.message(), "invalid RouteTable frame payload");
+                assert!(!format!("{error:?}").contains(marker));
+                assert!(!error.to_string().contains(marker));
+            }
+        }
         Ok(())
     }
 

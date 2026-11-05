@@ -8,10 +8,9 @@ use crate::{
     GatewayError, GatewayPeerConfig, GatewayRoutingConfig,
     peer::{PeerEvents, PeerHandle, PeerRuntime},
     routing::{RoutingHandle, RoutingRuntime},
-    state::GatewayAction,
 };
 
-use super::{Gateway, Inner};
+use super::{Gateway, Inner, effects::ControlResult};
 
 pub(super) struct DistributedRuntime {
     gateway_id: GatewayId,
@@ -20,8 +19,8 @@ pub(super) struct DistributedRuntime {
     peer: PeerHandle,
     peer_events: PeerEvents,
     peer_runtime: PeerRuntime,
-    action_result_sender: mpsc::Sender<Vec<GatewayAction>>,
-    action_results: mpsc::Receiver<Vec<GatewayAction>>,
+    action_result_sender: mpsc::Sender<ControlResult>,
+    action_results: mpsc::Receiver<ControlResult>,
     shutdown: CancellationToken,
 }
 
@@ -65,7 +64,7 @@ impl DistributedRuntime {
         self.peer.clone()
     }
 
-    pub(super) fn action_results(&self) -> mpsc::Sender<Vec<GatewayAction>> {
+    pub(super) fn action_results(&self) -> mpsc::Sender<ControlResult> {
         self.action_result_sender.clone()
     }
 

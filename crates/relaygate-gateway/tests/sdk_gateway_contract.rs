@@ -29,6 +29,9 @@ mod endpoint;
 #[path = "public_sdk/resource_limits.rs"]
 mod resource_limits;
 
+#[path = "public_sdk/recovery_soak.rs"]
+mod recovery_soak;
+
 #[tokio::test]
 async fn sdk_gateway_path_uses_tls_before_operation_authorization() -> TestResult {
     let CertifiedKey { cert, signing_key } =

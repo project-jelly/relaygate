@@ -11,7 +11,7 @@ use crate::{Config, Error, ErrorCode, ErrorOrigin, PeerObservation, Result};
 
 mod outbound;
 
-pub(crate) use outbound::{FrameCommit, SessionOutbound, session_outbound_channel};
+pub(crate) use outbound::{FrameCommit, OutboundItem, SessionOutbound, session_outbound_channel};
 
 pub(crate) type WireTransport = Framed<BoxedIo, FrameCodec>;
 
@@ -21,6 +21,22 @@ const SDK_FRAME_WRITE_BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
 pub(crate) struct EstablishedSession {
     pub(crate) id: SessionId,
     pub(crate) transport: WireTransport,
+}
+
+pub(crate) async fn establish_initial(config: &Config) -> Result<EstablishedSession> {
+    // Observe the whole initial connection: its outer deadline must resolve
+    // before the metric guard, rather than dropping an observed inner attempt.
+    crate::observability::observe("session_connect", async {
+        crate::retry::retry_precommit(
+            config.connect_deadline()?,
+            ReconnectBackoff::new(config.reconnect_initial, config.reconnect_maximum),
+            &CancellationToken::new(),
+            Error::transport_deadline("Gateway connection or handshake deadline exceeded"),
+            || establish_inner(config),
+        )
+        .await
+    })
+    .await
 }
 
 pub(crate) async fn establish(config: &Config) -> Result<EstablishedSession> {
@@ -50,7 +66,7 @@ async fn establish_inner(config: &Config) -> Result<EstablishedSession> {
     transport
         .send(Frame::Hello)
         .await
-        .map_err(|error| Error::transport_unavailable(format!("session HELLO failed: {error}")))?;
+        .map_err(|error| Error::from_protocol(error, "session HELLO failed"))?;
     let frame = transport
         .next()
         .await
@@ -296,7 +312,9 @@ fn duration_from_nanos(nanos: u128) -> Duration {
     } else {
         nanos % NANOS_PER_SECOND
     };
-    Duration::new(seconds as u64, subsecond_nanos as u32).max(Duration::from_millis(1))
+    // Nanosecond rounding must keep retries positive without exceeding a
+    // configured sub-millisecond maximum. Timer wakeup precision is separate.
+    Duration::new(seconds as u64, subsecond_nanos as u32).max(Duration::from_nanos(1))
 }
 
 #[cfg(test)]

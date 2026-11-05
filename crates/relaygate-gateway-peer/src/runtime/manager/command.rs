@@ -1,5 +1,8 @@
 //! OPEN admission, cancellation, and stream-command dispatch.
 
+#[cfg(test)]
+mod tests;
+
 use relaygate_protocol::ErrorCode;
 use relaygate_route_table::GatewayId;
 use tokio::sync::oneshot;
@@ -202,12 +205,21 @@ impl Manager {
             )));
             return;
         }
+        let terminal = matches!(
+            &command,
+            StreamCommand::Close | StreamCommand::Reset { .. } | StreamCommand::Failed { .. }
+        );
         let command = TransportCommand::Stream {
             stream_id: key.stream_id(),
             command,
             reply,
         };
         if let Err(error) = transport.try_send(command) {
+            if terminal {
+                // Once accepted, cleanup cannot depend on the caller still
+                // polling the command reply.
+                transport.force_close(crate::transport::TransportCloseReason::WriterFailed);
+            }
             let _ = error;
         }
     }

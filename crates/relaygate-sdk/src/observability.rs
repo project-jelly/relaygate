@@ -3,6 +3,8 @@ use std::time::Instant;
 mod operation;
 pub(crate) use operation::observe;
 #[cfg(test)]
+mod connection_tests;
+#[cfg(test)]
 mod contract_tests;
 
 // Tracing callsite interest is process-global even with a thread-local subscriber.

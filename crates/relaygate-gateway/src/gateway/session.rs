@@ -19,7 +19,7 @@ use tokio_util::{codec::Framed, sync::CancellationToken};
 
 use crate::authorization::ControlOperation;
 use crate::metrics::{observe_sdk_heartbeat_round_trip, observe_sdk_heartbeat_timeout};
-use crate::state::{ProtocolViolation, SdkWriterItem};
+use crate::state::{ProtocolViolation, SdkWriterItem, observe_dial_result};
 
 use super::{Inner, heartbeat::SessionHeartbeat};
 
@@ -29,6 +29,29 @@ const SDK_FRAME_WRITE_BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
 const WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
 mod admission;
+
+/// Accounts for an admitted DIAL until the synchronous state transition owns
+/// its terminal result. Dropping the read future can bypass that transition.
+struct PendingDialObservation(Option<std::time::Instant>);
+
+impl PendingDialObservation {
+    fn new(operation: &ControlOperation) -> Self {
+        Self(match operation {
+            ControlOperation::Dial { started_at, .. } => Some(*started_at),
+            ControlOperation::Publish { .. } => None,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for PendingDialObservation {
+    fn drop(&mut self) {
+        observe_dial_result(self.0, Some(ErrorCode::Cancelled));
+    }
+}
 
 impl Inner {
     pub(super) async fn run_session(
@@ -202,6 +225,7 @@ impl Inner {
                         ).await?;
                         continue;
                     }
+                    let mut dial_observation = PendingDialObservation::new(&operation);
                     let verification_started = std::time::Instant::now();
                     let verification_deadline = Instant::now()
                         .checked_add(self.authorization_timeout)
@@ -237,6 +261,7 @@ impl Inner {
                         ),
                         Err(code) => state.authorization_failed(session_id, &operation, code),
                     });
+                    dial_observation.disarm();
                     self.send_session_actions(
                         actions,
                         session_id,
@@ -410,3 +435,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod observation_tests;

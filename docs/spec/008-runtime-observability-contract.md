@@ -23,7 +23,11 @@ existing session·Binding·Pipe를 유지합니다.
 
 ## 로그와 metric
 
-Lifecycle log는 `debug`가 기본이며, `info`에서는 drain과 `warn` 이상 사건만 기록합니다.
+| level | 대상 |
+| --- | --- |
+| `debug` | session·Listener·Pipe의 개별 lifecycle와 요청 진단 |
+| `info` | process 시작·종료, drain, SDK reconnect episode, RT dependency ready·recovery, 명시적으로 활성화한 snapshot |
+| `warn`·`error` | 운영 경고·실패 |
 
 | category | lifecycle event |
 | --- | --- |
@@ -36,7 +40,8 @@ Lifecycle log는 `debug`가 기본이며, `info`에서는 drain과 `warn` 이상
 | protection | TLS, queue, capacity rejection |
 
 Lifecycle field는 bounded identifier와 outcome을 사용합니다. AccessToken, decoded claim, credential, private key,
-payload와 free-form error body는 redaction합니다. DATA RTT와 payload goodput은 명시적으로 실행한 SDK probe가
+payload와 free-form error body는 redaction합니다. RouteTable frame의 JSON 해석 오류는 입력 원문을 보관하거나
+진단에 포함하지 않습니다. DATA RTT와 payload goodput은 명시적으로 실행한 SDK probe가
 측정합니다.
 
 | 운영 질문 | metric | 판정 |
@@ -60,12 +65,13 @@ payload와 free-form error body는 redaction합니다. DATA RTT와 payload goodp
 | 구간 | metric | 측정 경계 |
 | --- | --- | --- |
 | GW DIAL | `relaygate_gateway_dial_requests_total`, `relaygate_gateway_dial_results_total`, `relaygate_gateway_dial_duration_seconds` | precheck 진입 -> OPENED/failure/cancel |
-| SDK 접속·DIAL | `relaygate_sdk_operation_results_total`, `relaygate_sdk_operation_duration_seconds` | `session_connect`: transport·TLS·HELLO/WELCOME; `dial`: API 진입 -> Pipe/실패/cancel |
+| SDK 접속·DIAL | `relaygate_sdk_operation_results_total`, `relaygate_sdk_operation_duration_seconds` | `session_connect`: transport·TLS·HELLO/WELCOME. 최초 수립은 재시도·backoff 포함 최종 결과 1회, managed reconnect는 시도당 1회; `dial`: API 진입 -> Pipe/실패/cancel |
 | publish | `relaygate_gateway_publish_results_total` | terminal result counter |
 | authorization | `relaygate_gateway_authorization_results_total`, `relaygate_gateway_authorization_duration_seconds` | verifier start -> success/failure |
 | heartbeat | timeout counter + `relaygate_gateway_heartbeat_duration_seconds{transport}` | committed PING -> matching PONG |
 | Gateway->RT | `relaygate_gateway_route_table_requests_total`, `relaygate_gateway_route_table_request_duration_seconds` | client queue admission -> response/failure |
-| RT actor | `relaygate_route_table_requests_total`, `relaygate_route_table_request_duration_seconds` | actor service start -> result |
+| RT 응답 | `relaygate_route_table_requests_total` | bounded response의 writer queue admission 성공; 최종 wire outcome·code |
+| RT actor | `relaygate_route_table_request_duration_seconds` | actor service start -> expiry 정리·검증·domain result; actor outcome |
 | peer | `relaygate_gateway_peer_handshakes_total`, `relaygate_gateway_peer_transport_closed_total` | transport lifecycle outcome |
 | GW->RT 연결 | `relaygate_gateway_route_connection_attempts_total{outcome,code}` | connect·handshake 시도 결과 |
 | RT dependency 전이 | `relaygate_gateway_route_dependency_transitions_total{previous,current}`, `relaygate_gateway_route_recovery_duration_seconds` | `starting|ready|degraded|terminal` 전이; degraded 진입 -> ready 복귀 |
@@ -79,7 +85,14 @@ SDK session_connect -> token source -> SDK dial -> established Pipe DATA RTT
                                       `-> GW precheck -> authorization -> local/RT resolve -> OFFER
 ```
 
+GW DIAL은 precheck 통과 후 authorization 대기 중 session 취소나 writer 실패로 중단돼도 기존 `cancelled`
+result와 duration을 한 번 기록합니다. State에 인계한 뒤의 결과는 state가 기록하며, 완료되지 않은 verification의
+authorization result·duration은 기록하지 않습니다.
+
 GW->RT와 RT actor histogram은 표본 경계가 다릅니다. 두 p95 차이를 network p95로 해석하지 않습니다.
+RT actor 시간은 actor queue 대기, 결과 생성 후 snapshot 갱신·reply 전달과 socket write를 포함하지 않습니다.
+RT 응답 counter는 actor 진입 전 거절이나 응답 크기 제한 결과도 포함하며, queue에 넣지 못한 응답은 세지 않습니다.
+따라서 두 지표의 표본 수·outcome은 일치하지 않을 수 있고, 응답 counter는 원격 수신 확인이 아닙니다.
 Heartbeat는 liveness RTT, DATA RTT는 payload 왕복입니다. SDK dial 시간은 token source와 session·queue 대기를
 포함합니다.
 
@@ -164,6 +177,6 @@ lifecycle log가 담당합니다.
 | `OBS-009` | SDK admission ready는 non-draining, transport·handshake slot 여유와 rate budget 여유의 conjunction이다. |
 | `OBS-010` | Dashboard runtime selector는 cluster·namespace 범위를 일관되게 적용한다. |
 | `OBS-011` | 고유 Pipe와 GW-local Pipe state를 구분하며 resource used/limit 집계 기준을 일치시킨다. |
-| `OBS-012` | SDK 계측은 error·polled future cancel·reconnect 미완료와 종료를 구분한다. |
+| `OBS-012` | SDK 계측은 error·polled future cancel·reconnect 미완료와 종료를 구분한다. 최초 연결의 전체 deadline 소진은 `error/deadline_exceeded`, caller의 polled future 취소는 `cancelled/cancelled`로 각각 1회 기록한다. |
 | `OBS-013` | 결과 분류와 gauge/rate 단위를 유지하고 실제 PromQL 기대값으로 검증한다. |
 | `OBS-014` | SDK live Pipe·buffered byte 점유는 cleanup 뒤 기준값으로 수렴하고 resource rejection은 bounded `resource` label로 구분한다. |

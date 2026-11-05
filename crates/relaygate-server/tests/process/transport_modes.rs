@@ -30,6 +30,29 @@ fn internal_plaintext_does_not_disable_sdk_tls() -> Result<(), Box<dyn Error>> {
 
 #[cfg(unix)]
 #[test]
+fn distributed_gateway_rejects_non_unicode_peer_bind_before_serving() -> Result<(), Box<dyn Error>>
+{
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let artifact = ShardDirectoryArtifact::create()?;
+    // If configuration accidentally accepts the invalid value, stop at the
+    // SDK bind instead of opening the default wildcard peer listener.
+    let occupied = TcpListener::bind(EPHEMERAL_LOOPBACK)?;
+    let output = server_command()
+        .env("RELAYGATE_BIND_ADDR", occupied.local_addr()?.to_string())
+        .env("RELAYGATE_RT_SHARD_DIRECTORY_PATH", artifact.path())
+        .env("RELAYGATE_GATEWAY_NAME", "gw-a")
+        .env("RELAYGATE_GATEWAY_LOCATOR", "127.0.0.1:27421")
+        .env("RELAYGATE_PEER_BIND_ADDR", OsString::from_vec(vec![0xff]))
+        .output()?;
+
+    assert_unsuccessful_output(&output, "RELAYGATE_PEER_BIND_ADDR is not valid Unicode");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("server.started"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn internal_transport_rejects_unknown_and_conflicting_modes_before_serving()
 -> Result<(), Box<dyn Error>> {
     for mode in ["", "tcp", "MTLS"] {

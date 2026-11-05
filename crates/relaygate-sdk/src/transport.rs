@@ -124,11 +124,10 @@ impl GatewayTransportConfig {
         let _ = stream.set_nodelay(true);
 
         match &self.kind {
-            GatewayTransport::TlsTcp { tls, .. } => {
-                tls.connect_boxed(stream).await.map_err(|error| {
-                    Error::transport_unavailable(format!("Gateway TLS handshake failed: {error}"))
-                })
-            }
+            GatewayTransport::TlsTcp { tls, .. } => tls
+                .connect_boxed(stream)
+                .await
+                .map_err(|error| Error::from_transport_io(error, "Gateway TLS handshake failed")),
             GatewayTransport::InsecureTcp { .. } => Ok(insecure_boxed(stream)),
         }
     }

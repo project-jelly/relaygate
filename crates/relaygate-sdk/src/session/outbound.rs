@@ -13,7 +13,7 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
@@ -22,17 +22,30 @@ use tokio::sync::{
     Notify,
     futures::OwnedNotified,
     mpsc::{self, error::TrySendError},
+    oneshot,
 };
 
+use crate::{Error, PeerObservation, Result};
+
+#[derive(Debug)]
+pub(crate) enum OutboundItem {
+    Frame(Frame),
+    Flush(oneshot::Sender<Result<()>>),
+}
+
 pub(crate) struct SessionOutbound {
-    sender: mpsc::Sender<Frame>,
+    sender: mpsc::Sender<OutboundItem>,
     capacity: Arc<Notify>,
     waiter: Option<Pin<Box<OwnedNotified>>>,
+    failure: Arc<Mutex<Option<Error>>>,
+    dirty: bool,
+    flushing: Option<oneshot::Receiver<Result<()>>>,
 }
 
 pub(crate) struct SessionOutboundReceiver {
-    receiver: mpsc::Receiver<Frame>,
+    receiver: mpsc::Receiver<OutboundItem>,
     capacity: Arc<Notify>,
+    failure: Arc<Mutex<Option<Error>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,13 +59,21 @@ pub(crate) fn session_outbound_channel(
 ) -> (SessionOutbound, SessionOutboundReceiver) {
     let (sender, receiver) = mpsc::channel(capacity);
     let capacity = Arc::new(Notify::new());
+    let failure = Arc::new(Mutex::new(None));
     (
         SessionOutbound {
             sender,
             capacity: Arc::clone(&capacity),
             waiter: None,
+            failure: Arc::clone(&failure),
+            dirty: false,
+            flushing: None,
         },
-        SessionOutboundReceiver { receiver, capacity },
+        SessionOutboundReceiver {
+            receiver,
+            capacity,
+            failure,
+        },
     )
 }
 
@@ -62,6 +83,9 @@ impl Clone for SessionOutbound {
             sender: self.sender.clone(),
             capacity: Arc::clone(&self.capacity),
             waiter: None,
+            failure: Arc::clone(&self.failure),
+            dirty: false,
+            flushing: None,
         }
     }
 }
@@ -75,11 +99,72 @@ impl SessionOutbound {
         &mut self,
         context: &mut Context<'_>,
         make_frame: impl FnOnce() -> Option<Frame>,
-    ) -> Poll<Result<FrameCommit, ()>> {
+    ) -> Poll<std::result::Result<FrameCommit, ()>> {
+        let result = self.poll_enqueue(context, || make_frame().map(OutboundItem::Frame));
+        if matches!(result, Poll::Ready(Ok(FrameCommit::Sent))) {
+            // A cancelled flush may already have queued its marker. New DATA or
+            // FIN must be covered by a later marker, never that older completion.
+            self.flushing = None;
+            self.dirty = true;
+        }
+        result
+    }
+
+    pub(crate) fn poll_flush(&mut self, context: &mut Context<'_>) -> Poll<Result<()>> {
+        if !self.dirty {
+            self.cancel_wait();
+            return Poll::Ready(Ok(()));
+        }
+        if self.flushing.is_none() {
+            let mut response = None;
+            match self.poll_enqueue(context, || {
+                let (sender, receiver) = oneshot::channel();
+                response = Some(receiver);
+                Some(OutboundItem::Flush(sender))
+            }) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(())) => return Poll::Ready(Err(self.flush_error())),
+                Poll::Ready(Ok(_)) => self.flushing = response,
+            }
+        }
+        let Some(response) = self.flushing.as_mut() else {
+            return Poll::Ready(Err(self.flush_error()));
+        };
+        match Pin::new(response).poll(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(result) => {
+                self.flushing = None;
+                let result = result.unwrap_or_else(|_| Err(self.flush_error()));
+                if result.is_ok() {
+                    self.dirty = false;
+                }
+                Poll::Ready(result)
+            }
+        }
+    }
+
+    fn flush_error(&self) -> Error {
+        self.failure_error("RelaySession ended before Pipe flush completed")
+    }
+
+    pub(crate) fn failure_error(&self, fallback_message: &str) -> Error {
+        self.failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .unwrap_or_else(|| Error::maybe_observed(fallback_message))
+            .with_observation(PeerObservation::MaybeObserved)
+    }
+
+    fn poll_enqueue(
+        &mut self,
+        context: &mut Context<'_>,
+        make_item: impl FnOnce() -> Option<OutboundItem>,
+    ) -> Poll<std::result::Result<FrameCommit, ()>> {
         match self.sender.try_reserve() {
             Ok(permit) => {
                 self.waiter = None;
-                let commit = commit_frame(permit, make_frame);
+                let commit = commit_frame(permit, make_item);
                 if commit == FrameCommit::Skipped {
                     self.capacity.notify_waiters();
                 }
@@ -103,7 +188,7 @@ impl SessionOutbound {
         match self.sender.try_reserve() {
             Ok(permit) => {
                 self.waiter = None;
-                let commit = commit_frame(permit, make_frame);
+                let commit = commit_frame(permit, make_item);
                 if commit == FrameCommit::Skipped {
                     self.capacity.notify_waiters();
                 }
@@ -124,14 +209,17 @@ impl SessionOutbound {
     }
 
     #[cfg(test)]
-    pub(crate) async fn send(&self, frame: Frame) -> Result<(), mpsc::error::SendError<Frame>> {
-        self.sender.send(frame).await
+    pub(crate) async fn send(
+        &self,
+        frame: Frame,
+    ) -> std::result::Result<(), mpsc::error::SendError<OutboundItem>> {
+        self.sender.send(OutboundItem::Frame(frame)).await
     }
 }
 
 fn commit_frame(
-    permit: mpsc::Permit<'_, Frame>,
-    make_frame: impl FnOnce() -> Option<Frame>,
+    permit: mpsc::Permit<'_, OutboundItem>,
+    make_frame: impl FnOnce() -> Option<OutboundItem>,
 ) -> FrameCommit {
     let Some(frame) = make_frame() else {
         return FrameCommit::Skipped;
@@ -141,7 +229,7 @@ fn commit_frame(
 }
 
 impl SessionOutboundReceiver {
-    pub(crate) async fn recv(&mut self) -> Option<Frame> {
+    pub(crate) async fn recv_item(&mut self) -> Option<OutboundItem> {
         let frame = self.receiver.recv().await;
         if frame.is_some() {
             self.capacity.notify_waiters();
@@ -149,13 +237,48 @@ impl SessionOutboundReceiver {
         frame
     }
 
-    #[cfg(test)]
-    pub(crate) fn try_recv(&mut self) -> Result<Frame, mpsc::error::TryRecvError> {
-        let frame = self.receiver.try_recv();
-        if frame.is_ok() {
-            self.capacity.notify_waiters();
+    pub(crate) fn fail(&mut self, failure: &Error) {
+        let failure = failure
+            .clone()
+            .with_observation(PeerObservation::MaybeObserved);
+        *self
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(failure.clone());
+        self.receiver.close();
+        while let Ok(item) = self.receiver.try_recv() {
+            if let OutboundItem::Flush(response) = item {
+                let _ = response.send(Err(failure.clone()));
+            }
         }
-        frame
+        self.capacity.notify_waiters();
+    }
+
+    // Unit-test mock writer: consuming a marker models a completed local send.
+    #[cfg(test)]
+    pub(crate) async fn recv(&mut self) -> Option<Frame> {
+        loop {
+            match self.recv_item().await? {
+                OutboundItem::Frame(frame) => return Some(frame),
+                OutboundItem::Flush(response) => {
+                    let _ = response.send(Ok(()));
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn try_recv(&mut self) -> std::result::Result<Frame, mpsc::error::TryRecvError> {
+        loop {
+            let item = self.receiver.try_recv()?;
+            self.capacity.notify_waiters();
+            match item {
+                OutboundItem::Frame(frame) => return Ok(frame),
+                OutboundItem::Flush(response) => {
+                    let _ = response.send(Ok(()));
+                }
+            }
+        }
     }
 }
 
@@ -166,66 +289,4 @@ impl Drop for SessionOutboundReceiver {
 }
 
 #[cfg(test)]
-mod tests {
-    use futures_util::future::poll_fn;
-    use relaygate_protocol::Frame;
-    use tokio::time::{Duration, timeout};
-
-    use super::{FrameCommit, session_outbound_channel};
-
-    #[tokio::test]
-    async fn skipped_commit_releases_capacity_and_wakes_another_writer()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (mut first, mut receiver) = session_outbound_channel(1);
-        let mut second = first.clone();
-        first.send(Frame::Ping { nonce: 1 }).await?;
-
-        let pending =
-            poll_fn(|context| second.poll_send(context, || Some(Frame::Pong { nonce: 2 })));
-        tokio::pin!(pending);
-        assert!(
-            timeout(Duration::from_millis(10), &mut pending)
-                .await
-                .is_err()
-        );
-
-        assert_eq!(
-            receiver.receiver.recv().await,
-            Some(Frame::Ping { nonce: 1 })
-        );
-        assert_eq!(
-            poll_fn(|context| first.poll_send(context, || None)).await,
-            Ok(FrameCommit::Skipped)
-        );
-        assert_eq!(
-            timeout(Duration::from_secs(1), &mut pending).await?,
-            Ok(FrameCommit::Sent)
-        );
-        assert_eq!(receiver.recv().await, Some(Frame::Pong { nonce: 2 }));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn dropping_the_receiver_fails_a_blocked_writer() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let (first, receiver) = session_outbound_channel(1);
-        let mut second = first.clone();
-        first.send(Frame::Ping { nonce: 1 }).await?;
-
-        let pending =
-            poll_fn(|context| second.poll_send(context, || Some(Frame::Pong { nonce: 2 })));
-        tokio::pin!(pending);
-        assert!(
-            timeout(Duration::from_millis(10), &mut pending)
-                .await
-                .is_err()
-        );
-
-        drop(receiver);
-        assert_eq!(
-            timeout(Duration::from_secs(1), &mut pending).await?,
-            Err(())
-        );
-        Ok(())
-    }
-}
+mod tests;
